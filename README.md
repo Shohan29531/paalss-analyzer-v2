@@ -1,6 +1,6 @@
-# PAALSS Transcript Analyzer (Streamlit)
+# PAALSS Transcript Analyzer
 
-A lightweight Streamlit app for generating **PAALSS-style analyses** from **Spanish aided AAC transcripts** using an **Ollama** model (Ollama Cloud or local Ollama).
+A lightweight app created using streamlit for generating **PAALSS-style analyses** from **Spanish aided AAC transcripts** using an **Ollama** model (Ollama Cloud or local Ollama).
 
 This app is designed for **research/clinical drafting support**. The output is **not diagnostic** and should be reviewed by a qualified clinician/researcher.
 
