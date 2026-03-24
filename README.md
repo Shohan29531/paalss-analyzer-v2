@@ -1,6 +1,6 @@
 # PAALSS Transcript Analyzer
 
-A lightweight app created using streamlit for generating **PAALSS-style analyses** from **Spanish aided AAC transcripts** using an **Ollama** model (Ollama Cloud or local Ollama).
+A lightweight app created using Streamlit for generating **PAALSS-style analyses** from **Spanish aided AAC transcripts** using an **Ollama** model (Ollama Cloud or local Ollama).
 
 This app is designed for **research/clinical drafting support**. The output is **not diagnostic** and should be reviewed by a qualified clinician/researcher.
 
@@ -12,7 +12,8 @@ This app is designed for **research/clinical drafting support**. The output is *
 - Extract / prefill a **numbered transcript block** (Enunciados).
 - Let you **edit the transcript** before analysis (the model analyzes exactly what you see in the editor).
 - Let you edit a **base system prompt** to control the PAALSS report format and level of detail.
-  - Note: the **system prompt text is not translated** when you switch UI language.
+  - Prompt edits are **not applied until you click `Save new prompt`**.
+  - The **system prompt text is not translated** when you switch UI language.
 - Send transcript + prompt to a selected Ollama model and return a **PAALSS-style report**.
 - Stream the output (optional) and download the report as **.docx**.
 - UI language toggle (English / Español) for the **app interface**.
@@ -31,6 +32,20 @@ This app is designed for **research/clinical drafting support**. The output is *
 - Default model is **`qwen3.5:cloud`** (if available on the configured host).
 - If you change the dropdown, the app will not “lock it in” until you click **Save model**.
 - The saved model is persisted locally in `./.paalss_settings.json` so it stays fixed across reloads.
+
+### Base prompt editing is explicit (editor + Save)
+- The prompt editor always shows the current saved prompt.
+- Changes inside the editor are only used after you click **Save new prompt**.
+- The saved prompt is persisted locally in `./.paalss_settings.json`.
+
+### API key behavior
+- The sidebar API key field is also explicit: click **Save API key** to apply the current value for the session.
+- For persistent local development, put the key in `./.streamlit/secrets.toml`.
+- For Streamlit Community Cloud, place the key in the app **Secrets** settings.
+
+### Temperature behavior
+- Temperature is fixed internally to **0.2** for more consistent report formatting.
+- The temperature control is hidden from the UI.
 
 ### File uploader instruction text
 Streamlit’s built-in uploader “Drag and drop…” text is not i18n-friendly. The app hides that built-in text and shows localized instructions instead.
@@ -51,45 +66,38 @@ pip install -r requirements.txt
 
 You can use either:
 
-#### Option A — Environment variables
+#### Option A — Streamlit secrets file (recommended for local dev)
+
+A template file is already included:
+
+- `./.streamlit/secrets.toml`
+
+Open that file and fill in your real key:
+
+```toml
+OLLAMA_HOST = "https://ollama.com"
+OLLAMA_API_KEY = "your-real-key-here"
+OLLAMA_MODEL = "qwen3.5:cloud"
+```
+
+#### Option B — Environment variables
 
 ```bash
-export OLLAMA_HOST="https://ollama.com"     # Ollama Cloud
-export OLLAMA_API_KEY="..."                 # required for Cloud
+export OLLAMA_HOST="https://ollama.com"
+export OLLAMA_API_KEY="..."
 ```
 
 For local Ollama:
 
 ```bash
-export OLLAMA_HOST="http://localhost:11434" # local Ollama
+export OLLAMA_HOST="http://localhost:11434"
 # OLLAMA_API_KEY usually not needed locally
 ```
-
-#### Option B — Streamlit secrets file (recommended for local dev)
-
-Create:
-
-- `./.streamlit/secrets.toml`  (do NOT commit)
-
-Example:
-
-```toml
-OLLAMA_HOST = "https://ollama.com"
-OLLAMA_API_KEY = "..."
-```
-
-If deploying on Streamlit Cloud, use the **Secrets** UI instead of committing files.
 
 ### 3) Run
 
 ```bash
 streamlit run app.py
-```
-
-If your entrypoint file is named differently, rename it to `app.py` or run:
-
-```bash
-streamlit run <your_file>.py
 ```
 
 ---
@@ -109,13 +117,38 @@ streamlit run <your_file>.py
 - Pick a model from the dropdown.
 - Click **Save model** to persist that selection.
 
-4) **Generate report**
-- Click **Run analysis**
-- Optional: enable/disable **Stream output**
-- Adjust **Temperature** (lower = more consistent formatting; higher = more variation)
+4) **Edit base prompt + Save new prompt**
+- Modify the base system prompt in the prompt tab.
+- Click **Save new prompt** to make the change take effect.
 
-5) **Export**
+5) **Generate report**
+- Click **Run analysis**.
+- Optional: enable/disable **Stream output**.
+
+6) **Export**
 - Download as `.docx` from the right panel.
+
+---
+
+## Streamlit Community Cloud deployment
+
+1. Push this repo to GitHub.
+2. In Streamlit Community Cloud, create a new app and point it to `app.py`.
+3. In the app **Secrets** panel, paste:
+
+```toml
+OLLAMA_HOST = "https://ollama.com"
+OLLAMA_API_KEY = "your-real-key-here"
+OLLAMA_MODEL = "qwen3.5:cloud"
+```
+
+4. Ensure `requirements.txt` stays in the repo root.
+5. Deploy.
+
+Notes:
+- `./.streamlit/secrets.toml` is for local development only.
+- On Community Cloud, secrets should go in the app’s hosted Secrets UI, not in the repo.
+- If needed, choose the Python version in Community Cloud’s **Advanced settings** during deployment.
 
 ---
 
@@ -131,7 +164,7 @@ streamlit run <your_file>.py
 
 ### “401 Unauthorized” (Ollama Cloud)
 - Your API key is missing/invalid/revoked.
-- Ensure `OLLAMA_API_KEY` is set (env var or secrets) and that you’re using the correct host.
+- Ensure `OLLAMA_API_KEY` is set in `./.streamlit/secrets.toml`, Streamlit Cloud Secrets, or the sidebar field.
 
 ### “404 Not Found” for `/api/chat`
 - Verify `OLLAMA_HOST` is set to `https://ollama.com` (or your local host).
@@ -149,8 +182,8 @@ streamlit run <your_file>.py
 
 ## Files created locally (do not commit)
 
-- `./.streamlit/secrets.toml` (if you use it)
-- `./.paalss_settings.json` (stores saved UI language + saved model)
+- `./.streamlit/secrets.toml`
+- `./.paalss_settings.json`
 - Any exported `.docx` files you download locally
 
 Add these to `.gitignore`:
@@ -165,5 +198,5 @@ Add these to `.gitignore`:
 ## Security
 
 - Never commit API keys (Ollama, Supabase, etc.) to Git.
-- Prefer environment variables or Streamlit secrets.
+- Prefer Streamlit secrets or environment variables.
 - If you ever accidentally committed a key, treat it as compromised and rotate/revoke it immediately.

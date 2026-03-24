@@ -27,18 +27,23 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "api_key_caption": "Get your key here: [Ollama API keys](https://ollama.com/settings/keys)",
         "api_key": "API key",
         "api_key_placeholder": "Paste your Ollama API key",
+        "api_key_secret_hint": "Persistent local key: put it in .streamlit/secrets.toml. On Streamlit Community Cloud, add it in the app Secrets settings.",
+        "save_api_key": "Save API key",
+        "saved_api_key": "API key saved for this session",
         "model": "Model",
         "refresh_models": "Refresh model list",
         "could_not_fetch_models": "Could not fetch model list from this host.",
         "save_model": "Save model",
         "saved": "Saved",
         "saved_model": "Saved model",
-        "temperature": "Temperature",
         "tab_analyzer": "Analyzer",
         "tab_prompt": "Base System Prompt",
         "prompt_title": "Base System Prompt",
         "prompt_caption": "Edit this prompt to control the structure and level of detail in the generated PAALSS report.",
-        "prompt_help": "This is sent as the system message. Changes take effect on the next run.",
+        "prompt_help": "Only the saved prompt is used when you run analysis.",
+        "save_prompt": "Save new prompt",
+        "saved_prompt": "Base system prompt saved",
+        "unsaved_prompt_changes": "You have unsaved prompt edits.",
         "reset_prompt": "Reset prompt",
         "download_prompt": "Download prompt",
         "upload_step": "1) Upload transcript",
@@ -70,7 +75,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
             "- Upload a transcript (.docx or .txt).\n"
             "- The app extracts utterances and pre-fills a numbered transcript block.\n"
             "- Edit the transcript block if needed.\n"
-            "- Edit the base system prompt in the “Base System Prompt” tab.\n"
+            "- Edit the base system prompt in the “Base System Prompt” tab and click “Save new prompt”.\n"
             "- Pick a model, click “Save model”, then run analysis."
         ),
     },
@@ -83,18 +88,23 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "api_key_caption": "Consigue tu clave aquí: [Claves API de Ollama](https://ollama.com/settings/keys)",
         "api_key": "Clave API",
         "api_key_placeholder": "Pega tu clave API de Ollama",
-        "model": "Modelo",
+        "api_key_secret_hint": "Clave local persistente: colócala en .streamlit/secrets.toml. En Streamlit Community Cloud, agrégala en Secrets de la app.",
+        "save_api_key": "Guardar clave API",
+        "saved_api_key": "Clave API guardada para esta sesión",
+        "model": "Model",
         "refresh_models": "Actualizar lista de modelos",
         "could_not_fetch_models": "No se pudo obtener la lista de modelos de este host.",
         "save_model": "Guardar modelo",
         "saved": "Guardado",
         "saved_model": "Modelo guardado",
-        "temperature": "Temperatura",
         "tab_analyzer": "Analizador",
         "tab_prompt": "Prompt base del sistema",
         "prompt_title": "Prompt base del sistema",
         "prompt_caption": "Edita este prompt para controlar la estructura y el nivel de detalle del informe PAALSS generado.",
-        "prompt_help": "Esto se envía como el mensaje del sistema. Los cambios se aplican en la próxima ejecución.",
+        "prompt_help": "Solo se usa el prompt guardado al ejecutar el análisis.",
+        "save_prompt": "Guardar nuevo prompt",
+        "saved_prompt": "Prompt base del sistema guardado",
+        "unsaved_prompt_changes": "Hay cambios sin guardar en el prompt.",
         "reset_prompt": "Restablecer prompt",
         "download_prompt": "Descargar prompt",
         "upload_step": "1) Subir transcripción",
@@ -126,11 +136,17 @@ STRINGS: Dict[str, Dict[str, str]] = {
             "- Sube una transcripción (.docx o .txt).\n"
             "- La app extrae enunciados y pre-rellena un bloque numerado.\n"
             "- Edita el bloque si hace falta.\n"
-            "- Edita el prompt base en la pestaña “Prompt base del sistema”.\n"
+            "- Edita el prompt base en la pestaña “Prompt base del sistema” y haz clic en “Guardar nuevo prompt”.\n"
             "- Elige un modelo, haz clic en “Guardar modelo” y ejecuta el análisis."
         ),
     },
 }
+
+
+DEFAULT_TEMPERATURE = 0.2
+APP_TITLE = "PAALSS Transcript Analyzer"
+PREFERRED_DEFAULT_MODEL = "qwen3.5:cloud"
+SETTINGS_FILE = os.path.join(os.path.dirname(__file__), ".paalss_settings.json")
 
 
 def t(key: str) -> str:
@@ -150,9 +166,11 @@ def _cfg(key: str, default: str = "") -> str:
     return os.environ.get(key, default)
 
 
-APP_TITLE = "PAALSS Transcript Analyzer"
-PREFERRED_DEFAULT_MODEL = "qwen3.5:cloud"  # user-requested default
-SETTINGS_FILE = os.path.join(os.path.dirname(__file__), ".paalss_settings.json")
+def _notify_success(message: str) -> None:
+    try:
+        st.toast(message)
+    except Exception:
+        st.success(message)
 
 
 def _strip_trailing_slash(s: str) -> str:
@@ -182,7 +200,6 @@ def _save_settings(d: Dict[str, Any]) -> None:
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
             json.dump(d, f, indent=2, ensure_ascii=False)
     except Exception:
-        # If the FS is read-only (rare), we still keep the value in session.
         pass
 
 
@@ -195,12 +212,10 @@ def _save_settings_merged(update: Dict[str, Any]) -> None:
 @st.cache_data(ttl=120)
 def _get_models_cached(host: str, api_key: str) -> List[str]:
     models = list_models(host, api_key=api_key)
-    # Stable ordering; also remove empties
     return sorted({m for m in models if m and isinstance(m, str)})
 
 
 def _is_cloud_host(host: str) -> bool:
-    # Keep this conservative: if user targets ollama.com, assume cloud.
     return host.startswith("https://ollama.com") or host.startswith("http://ollama.com")
 
 
@@ -213,7 +228,6 @@ def _set_lang(lang: str) -> None:
 
 
 def _on_lang_en_change() -> None:
-    # If English is checked, force English. If unchecked, keep at least one selected.
     if st.session_state.lang_en:
         _set_lang("en")
     else:
@@ -225,7 +239,6 @@ def _on_lang_en_change() -> None:
 
 
 def _on_lang_es_change() -> None:
-    # If Español is checked, force Spanish. If unchecked, fall back to English.
     if st.session_state.lang_es:
         _set_lang("es")
     else:
@@ -238,7 +251,6 @@ st.set_page_config(
     layout="wide",
 )
 
-# --- Session defaults ---
 settings_boot = _load_settings()
 
 if "lang" not in st.session_state:
@@ -252,7 +264,10 @@ if "lang_es" not in st.session_state:
     st.session_state.lang_es = st.session_state.lang == "es"
 
 if "system_prompt" not in st.session_state:
-    st.session_state.system_prompt = DEFAULT_SYSTEM_PROMPT
+    st.session_state.system_prompt = str(settings_boot.get("system_prompt") or DEFAULT_SYSTEM_PROMPT)
+
+if "prompt_editor" not in st.session_state:
+    st.session_state.prompt_editor = st.session_state.system_prompt
 
 if "transcript_text" not in st.session_state:
     st.session_state.transcript_text = ""
@@ -269,8 +284,12 @@ if "saved_model" not in st.session_state:
 if "model_pick" not in st.session_state:
     st.session_state.model_pick = ""
 
+hidden_host = _normalize_host(_cfg("OLLAMA_HOST", "https://ollama.com"))
+hidden_api_key = _cfg("OLLAMA_API_KEY", "").strip()
+host = hidden_host
+api_key = hidden_api_key
 
-# --- Sidebar (language + connection + model) ---
+
 with st.sidebar:
     st.markdown(f"### {t('language')}")
     lcols = st.columns(2)
@@ -282,37 +301,8 @@ with st.sidebar:
     st.divider()
     st.markdown(f"## {t('app_title')}")
 
-    st.markdown(f"### {t('connection')}")
-
-    default_host = _cfg("OLLAMA_HOST", "https://ollama.com")
-    host_input = st.text_input(
-        t("ollama_host"),
-        value=default_host,
-        help=t("ollama_host_help"),
-    )
-    host = _normalize_host(host_input)
-
-    st.markdown(t("api_key_caption"))
-    env_key = _cfg("OLLAMA_API_KEY", "").strip()
-    user_key = st.text_input(
-        t("api_key"),
-        value="",
-        type="password",
-        placeholder=t("api_key_placeholder"),
-    )
-    api_key = user_key.strip() if user_key.strip() else env_key
-
-    st.divider()
-
-    st.markdown(f"### {t('model')}")
-
-    # Refresh button (clears cached model list)
-    if st.button(t("refresh_models"), use_container_width=True):
-        st.cache_data.clear()
-
-    # Load model list (best-effort)
     models: List[str] = []
-    models_err: str = ""
+    models_err = ""
     if api_key or not _is_cloud_host(host):
         try:
             models = _get_models_cached(host, api_key)
@@ -323,11 +313,8 @@ with st.sidebar:
     if models_err:
         st.caption(t("could_not_fetch_models"))
 
-    # Load persisted choice (file) once, then keep in session.
     if not st.session_state.saved_model:
         persisted = str(settings_boot.get("model") or "").strip()
-
-        # Choose default deterministically.
         if persisted:
             chosen = persisted
         elif PREFERRED_DEFAULT_MODEL:
@@ -335,24 +322,20 @@ with st.sidebar:
         else:
             chosen = ""
 
-        # If we have a model list, try to map to something real.
-        if models:
-            if chosen not in models:
-                preferred_base = chosen.split(":", 1)[0] if chosen else ""
-                candidates = [m for m in models if preferred_base and preferred_base in m]
-                chosen = candidates[0] if candidates else models[0]
+        if models and chosen not in models:
+            preferred_base = chosen.split(":", 1)[0] if chosen else ""
+            candidates = [m for m in models if preferred_base and preferred_base in m]
+            chosen = candidates[0] if candidates else models[0]
 
         st.session_state.saved_model = chosen
         st.session_state.model_pick = chosen
 
-    # Dropdown options: show discovered models when available.
     options = models[:] if models else []
     if st.session_state.saved_model and st.session_state.saved_model not in options:
         options = [st.session_state.saved_model] + options
     if PREFERRED_DEFAULT_MODEL and PREFERRED_DEFAULT_MODEL not in options:
         options = [PREFERRED_DEFAULT_MODEL] + options
 
-    # de-dupe while preserving order
     seen = set()
     options = [m for m in options if not (m in seen or seen.add(m))]
 
@@ -371,17 +354,15 @@ with st.sidebar:
         if st.button(t("save_model"), type="primary", use_container_width=True):
             st.session_state.saved_model = st.session_state.model_pick
             _save_settings_merged({"model": st.session_state.saved_model})
-            st.success(t("saved"))
-
+            _notify_success(t("saved"))
     with save_cols[1]:
-        st.caption("\n")
+        st.caption("")
 
     st.caption(f"{t('saved_model')}: `{st.session_state.saved_model}`")
+    if st.button(t("refresh_models"), use_container_width=True):
+        st.cache_data.clear()
 
-    temperature = st.slider(t("temperature"), 0.0, 1.0, 0.2, 0.05)
 
-
-# --- Main UI ---
 st.markdown(
     """
 <style>
@@ -392,43 +373,50 @@ st.markdown(
     padding-top: 4.25rem !important;
   }
 
-  /* Hide Streamlit default file-uploader instruction text (so we can localize) */
   div[data-testid="stFileUploaderDropzoneInstructions"] { display: none !important; }
-
 </style>
 """,
     unsafe_allow_html=True,
 )
 
-tabs = st.tabs([t("tab_analyzer"), t("tab_prompt")])
 
+tabs = st.tabs([t("tab_analyzer"), t("tab_prompt")])
 
 with tabs[1]:
     st.markdown(f"### {t('prompt_title')}")
     st.caption(t("prompt_caption"))
 
-    # NOTE: Prompt content is NOT translated.
-    st.session_state.system_prompt = st.text_area(
+    st.text_area(
         "",
-        value=st.session_state.system_prompt,
+        key="prompt_editor",
         height=720,
         help=t("prompt_help"),
     )
 
-    pcols = st.columns([0.25, 0.25, 0.50])
+    if st.session_state.prompt_editor != st.session_state.system_prompt:
+        st.info(t("unsaved_prompt_changes"))
+
+    pcols = st.columns([0.25, 0.25, 0.25, 0.25])
     with pcols[0]:
+        if st.button(t("save_prompt"), type="primary", use_container_width=True):
+            st.session_state.system_prompt = st.session_state.prompt_editor
+            _save_settings_merged({"system_prompt": st.session_state.system_prompt})
+            _notify_success(t("saved_prompt"))
+    with pcols[1]:
         if st.button(t("reset_prompt"), use_container_width=True):
             st.session_state.system_prompt = DEFAULT_SYSTEM_PROMPT
+            st.session_state.prompt_editor = DEFAULT_SYSTEM_PROMPT
+            _save_settings_merged({"system_prompt": DEFAULT_SYSTEM_PROMPT})
+            _notify_success(t("saved_prompt"))
             st.rerun()
-    with pcols[1]:
+    with pcols[2]:
         st.download_button(
             t("download_prompt"),
-            data=st.session_state.system_prompt.encode("utf-8"),
+            data=st.session_state.prompt_editor.encode("utf-8"),
             file_name="paalss_system_prompt.txt",
             mime="text/plain",
             use_container_width=True,
         )
-
 
 with tabs[0]:
     left, right = st.columns([0.55, 0.45], gap="large")
@@ -491,7 +479,6 @@ with tabs[0]:
             elif not st.session_state.transcript_text.strip():
                 st.error(t("err_missing_transcript"))
             else:
-                # Validate saved model if we can see a list.
                 if models and st.session_state.saved_model not in models:
                     st.error(t("err_saved_model_unavailable"))
                 else:
@@ -516,7 +503,7 @@ with tabs[0]:
                                 api_key=api_key,
                                 model=st.session_state.saved_model,
                                 messages=messages,
-                                temperature=temperature,
+                                temperature=DEFAULT_TEMPERATURE,
                             ):
                                 acc += chunk
                                 out.text(acc)
@@ -526,7 +513,7 @@ with tabs[0]:
                                 api_key=api_key,
                                 model=st.session_state.saved_model,
                                 messages=messages,
-                                temperature=temperature,
+                                temperature=DEFAULT_TEMPERATURE,
                             )
                             out.text(acc)
 
