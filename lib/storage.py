@@ -26,7 +26,6 @@ except Exception:  # pragma: no cover
     dict_row = None
 
 
-
 # ---------------- basic helpers ----------------
 
 
@@ -160,7 +159,8 @@ def init_db() -> None:
         CREATE TABLE IF NOT EXISTS users (
             user_id TEXT PRIMARY KEY,
             password_hash TEXT NOT NULL,
-            role TEXT NOT NULL
+            role TEXT NOT NULL,
+            language TEXT
         )
         """
     )
@@ -227,6 +227,7 @@ def init_db() -> None:
             """
         )
 
+    _add_column("users", "language", "TEXT")
     _add_column("analyses", "analysis_uid", "TEXT")
     _add_column("analyses", "source_filename", "TEXT")
     _add_column("analyses", "transcript_text", "TEXT")
@@ -243,11 +244,20 @@ def init_db() -> None:
     else:
         _exec("CREATE UNIQUE INDEX IF NOT EXISTS analyses_analysis_uid_idx ON analyses (analysis_uid)")
 
+    _exec(
+        "UPDATE users SET language = ? WHERE language IS NULL OR language = ''"
+        if not _USE_PG
+        else "UPDATE users SET language = %s WHERE language IS NULL OR language = ''",
+        ("en",),
+    )
+
     rows = _exec("SELECT id FROM analyses WHERE analysis_uid IS NULL OR analysis_uid = ''", fetch="all")
     for row in _rows_to_dicts(rows):
         aid = int(row.get("id"))
         _exec(
-            "UPDATE analyses SET analysis_uid = ? WHERE id = ?" if not _USE_PG else "UPDATE analyses SET analysis_uid = %s WHERE id = %s",
+            "UPDATE analyses SET analysis_uid = ? WHERE id = ?"
+            if not _USE_PG
+            else "UPDATE analyses SET analysis_uid = %s WHERE id = %s",
             (uuid.uuid4().hex, aid),
         )
 
@@ -285,12 +295,12 @@ def set_setting(key: str, value: str) -> None:
         )
 
 
-def get_system_prompt(default: str) -> str:
-    return str(get_setting("system_prompt", default) or default)
+def get_system_prompt(default: str, lang: str = "en") -> str:
+    return str(get_setting(f"system_prompt_{lang}", default) or default)
 
 
-def set_system_prompt(prompt: str) -> None:
-    set_setting("system_prompt", prompt or "")
+def set_system_prompt(prompt: str, lang: str = "en") -> None:
+    set_setting(f"system_prompt_{lang}", prompt or "")
 
 
 def get_active_model(default: str) -> str:
@@ -313,27 +323,34 @@ def any_admin_exists() -> bool:
     return bool(row)
 
 
-def upsert_user(user_id: str, password: str, role: str) -> None:
+def upsert_user(user_id: str, password: str, role: str, language: Optional[str] = None) -> None:
     pw_hash = _hash_password(password)
+    lang = (language or "").strip() or get_user_language(user_id, "en")
     if _USE_PG:
         _exec(
             """
-            INSERT INTO users (user_id, password_hash, role)
-            VALUES (%s, %s, %s)
+            INSERT INTO users (user_id, password_hash, role, language)
+            VALUES (%s, %s, %s, %s)
             ON CONFLICT (user_id)
-            DO UPDATE SET password_hash = EXCLUDED.password_hash, role = EXCLUDED.role
+            DO UPDATE SET
+                password_hash = EXCLUDED.password_hash,
+                role = EXCLUDED.role,
+                language = COALESCE(EXCLUDED.language, users.language)
             """,
-            (user_id, pw_hash, role),
+            (user_id, pw_hash, role, lang),
         )
     else:
         _exec(
             """
-            INSERT INTO users (user_id, password_hash, role)
-            VALUES (?, ?, ?)
+            INSERT INTO users (user_id, password_hash, role, language)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(user_id)
-            DO UPDATE SET password_hash = excluded.password_hash, role = excluded.role
+            DO UPDATE SET
+                password_hash = excluded.password_hash,
+                role = excluded.role,
+                language = COALESCE(excluded.language, users.language)
             """,
-            (user_id, pw_hash, role),
+            (user_id, pw_hash, role, lang),
         )
 
 
@@ -342,7 +359,9 @@ def set_user_password(user_id: str, new_password: str) -> bool:
         return False
     pw_hash = _hash_password(new_password)
     _exec(
-        "UPDATE users SET password_hash = ? WHERE user_id = ?" if not _USE_PG else "UPDATE users SET password_hash = %s WHERE user_id = %s",
+        "UPDATE users SET password_hash = ? WHERE user_id = ?"
+        if not _USE_PG
+        else "UPDATE users SET password_hash = %s WHERE user_id = %s",
         (pw_hash, user_id),
     )
     return True
@@ -350,14 +369,16 @@ def set_user_password(user_id: str, new_password: str) -> bool:
 
 def verify_user(user_id: str, password: str) -> Optional[Dict[str, str]]:
     row = _exec(
-        "SELECT user_id, password_hash, role FROM users WHERE user_id = ?" if not _USE_PG else "SELECT user_id, password_hash, role FROM users WHERE user_id = %s",
+        "SELECT user_id, password_hash, role, language FROM users WHERE user_id = ?"
+        if not _USE_PG
+        else "SELECT user_id, password_hash, role, language FROM users WHERE user_id = %s",
         (user_id,),
         fetch="one",
     )
     if not row:
         return None
 
-    data = row if isinstance(row, dict) else {"user_id": row[0], "password_hash": row[1], "role": row[2]}
+    data = row if isinstance(row, dict) else {"user_id": row[0], "password_hash": row[1], "role": row[2], "language": row[3]}
     stored = data.get("password_hash")
     if stored is None:
         return None
@@ -379,11 +400,17 @@ def verify_user(user_id: str, password: str) -> Optional[Dict[str, str]]:
     if used_plaintext:
         new_hash = _hash_password(password)
         _exec(
-            "UPDATE users SET password_hash = ? WHERE user_id = ?" if not _USE_PG else "UPDATE users SET password_hash = %s WHERE user_id = %s",
+            "UPDATE users SET password_hash = ? WHERE user_id = ?"
+            if not _USE_PG
+            else "UPDATE users SET password_hash = %s WHERE user_id = %s",
             (new_hash, user_id),
         )
 
-    return {"user_id": str(data.get("user_id") or ""), "role": str(data.get("role") or "user")}
+    return {
+        "user_id": str(data.get("user_id") or ""),
+        "role": str(data.get("role") or "user"),
+        "language": str(data.get("language") or "en"),
+    }
 
 
 def change_user_password(user_id: str, current_password: str, new_password: str) -> bool:
@@ -393,8 +420,31 @@ def change_user_password(user_id: str, current_password: str, new_password: str)
     return set_user_password(user_id, new_password)
 
 
+def get_user_language(user_id: str, default: str = "en") -> str:
+    row = _exec(
+        "SELECT language FROM users WHERE user_id = ?" if not _USE_PG else "SELECT language FROM users WHERE user_id = %s",
+        (user_id,),
+        fetch="one",
+    )
+    if not row:
+        return default
+    if isinstance(row, dict):
+        return str(row.get("language") or default)
+    return str(row[0] or default)
+
+
+def set_user_language(user_id: str, language: str) -> None:
+    lang = "es" if str(language).strip().lower() == "es" else "en"
+    _exec(
+        "UPDATE users SET language = ? WHERE user_id = ?"
+        if not _USE_PG
+        else "UPDATE users SET language = %s WHERE user_id = %s",
+        (lang, user_id),
+    )
+
+
 def list_users() -> List[Dict[str, Any]]:
-    rows = _exec("SELECT user_id, role FROM users ORDER BY user_id", fetch="all")
+    rows = _exec("SELECT user_id, role, language FROM users ORDER BY user_id", fetch="all")
     return _rows_to_dicts(rows)
 
 
@@ -423,7 +473,9 @@ def create_session(user_id: str, role: str, hours: int = 12) -> str:
 
 def get_session(token: str) -> Optional[Dict[str, Any]]:
     row = _exec(
-        "SELECT token, user_id, role, expires_at FROM sessions WHERE token = ?" if not _USE_PG else "SELECT token, user_id, role, expires_at FROM sessions WHERE token = %s",
+        "SELECT token, user_id, role, expires_at FROM sessions WHERE token = ?"
+        if not _USE_PG
+        else "SELECT token, user_id, role, expires_at FROM sessions WHERE token = %s",
         (token,),
         fetch="one",
     )

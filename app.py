@@ -11,7 +11,11 @@ from streamlit_cookies_manager_ext import EncryptedCookieManager
 
 from lib.docx_report import report_text_to_docx_bytes
 from lib.ollama import OllamaError, chat_once, chat_stream, list_models
-from lib.prompts import DEFAULT_SYSTEM_PROMPT, build_recommendation_user_prompt
+from lib.prompts import (
+    DEFAULT_SYSTEM_PROMPTS,
+    build_recommendation_user_prompt,
+    get_default_system_prompt,
+)
 from lib.storage import (
     any_admin_exists,
     change_user_password,
@@ -22,11 +26,13 @@ from lib.storage import (
     get_analysis,
     get_session,
     get_system_prompt,
+    get_user_language,
     init_db,
     list_analyses_for_user,
     list_users,
     set_active_model,
     set_system_prompt,
+    set_user_language,
     upsert_user,
     update_analysis,
     verify_user,
@@ -37,14 +43,16 @@ from lib.transcript_parser import (
     parse_transcript_txt,
 )
 
-APP_TITLE = "PAALSS Transcript Analyzer"
+APP_TITLES = {"en": "PAALSS Transcript Analyzer", "es": "Analizador de Transcripciones PAALSS"}
 PREFERRED_DEFAULT_MODEL = "qwen3.5:cloud"
 DEFAULT_TEMPERATURE = 0.2
 COOKIE_KEY = "paalss_session_token"
+LANGUAGE_COOKIE_KEY = "paalss_lang"
 
 STRINGS: Dict[str, Dict[str, str]] = {
     "en": {
         "language": "Language",
+        "app_title": "PAALSS Transcript Analyzer",
         "signed_in_as": "Signed in as",
         "role_admin": "admin",
         "role_user": "user",
@@ -114,9 +122,18 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "user_prompt_intro": "Analyze the following transcript according to PAALSS and write the full report.",
         "user_prompt_transcript": "TRANSCRIPT (numbered enunciados):",
         "empty_state": "Upload a transcript to create the first saved analysis.",
+        "username_password_required": "Username and password are required.",
+        "learner": "Learner",
+        "date": "Date",
+        "session": "Session",
+        "sample": "Sample",
+        "untitled_transcript": "Untitled transcript",
+        "db_init_failed": "Database initialization failed. Check DATABASE_URL / Supabase connection settings.",
+        "db_init_help": "If you are using Supabase on Streamlit Cloud, use the Supavisor session pooler connection string, not the direct db.<project-ref>.supabase.co host.",
     },
     "es": {
         "language": "Idioma",
+        "app_title": "Analizador de Transcripciones PAALSS",
         "signed_in_as": "Sesión iniciada como",
         "role_admin": "admin",
         "role_user": "usuario",
@@ -186,6 +203,14 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "user_prompt_intro": "Analiza la siguiente transcripción según PAALSS y escribe el informe completo.",
         "user_prompt_transcript": "TRANSCRIPCIÓN (enunciados numerados):",
         "empty_state": "Sube una transcripción para crear el primer análisis guardado.",
+        "username_password_required": "Se requieren nombre de usuario y contraseña.",
+        "learner": "Aprendiz",
+        "date": "Fecha",
+        "session": "Sesión",
+        "sample": "Muestra",
+        "untitled_transcript": "Transcripción sin título",
+        "db_init_failed": "La inicialización de la base de datos falló. Revisa DATABASE_URL y la configuración de conexión de Supabase.",
+        "db_init_help": "Si usas Supabase en Streamlit Cloud, utiliza la cadena de conexión de Supavisor en modo session pooler, no el host directo db.<project-ref>.supabase.co.",
     },
 }
 
@@ -193,6 +218,15 @@ STRINGS: Dict[str, Dict[str, str]] = {
 def t(key: str) -> str:
     lang = st.session_state.get("lang", "en")
     return STRINGS.get(lang, STRINGS["en"]).get(key, STRINGS["en"].get(key, key))
+
+
+def _normalize_lang(lang: Any) -> str:
+    return "es" if str(lang).strip().lower() == "es" else "en"
+
+
+def _app_title(lang: Optional[str] = None) -> str:
+    chosen = _normalize_lang(lang or st.session_state.get("lang", "en"))
+    return APP_TITLES.get(chosen, APP_TITLES["en"])
 
 
 # ---------------- configuration helpers ----------------
@@ -243,7 +277,7 @@ def _title_from_first_line(text: str, max_chars: int = 72) -> str:
             line = cleaned
             break
     if not line:
-        return "Untitled transcript"
+        return t("untitled_transcript")
     line = re.sub(r"\s+", " ", line).strip("`\"' ")
     return line if len(line) <= max_chars else line[: max_chars - 1].rstrip() + "…"
 
@@ -256,10 +290,10 @@ def _derive_title(filename: str, transcript_text: str, meta: Dict[str, Any]) -> 
         return f"{learner} — {date}"
     if learner:
         return learner
-    if first_line and first_line != "Untitled transcript":
+    if first_line and first_line != t("untitled_transcript"):
         return first_line
     stem = Path(filename or "transcript").stem.strip()
-    return stem or "Untitled transcript"
+    return stem or t("untitled_transcript")
 
 
 # ---------------- cookies / auth ----------------
@@ -269,13 +303,18 @@ cookies = EncryptedCookieManager(prefix="paalss_auth", password=COOKIE_SECRET)
 if not cookies.ready():
     st.stop()
 
+st.session_state.setdefault("lang", _normalize_lang(cookies.get(LANGUAGE_COOKIE_KEY) or "en"))
+st.set_page_config(page_title=_app_title(), page_icon="🧾", layout="wide")
+
 
 @st.cache_resource
 def _ensure_db() -> tuple[bool, str]:
     try:
         init_db()
-        if not get_system_prompt(""):
-            set_system_prompt(DEFAULT_SYSTEM_PROMPT)
+        if not get_system_prompt("", "en"):
+            set_system_prompt(get_default_system_prompt("en"), "en")
+        if not get_system_prompt("", "es"):
+            set_system_prompt(get_default_system_prompt("es"), "es")
         if not get_active_model(""):
             set_active_model(DEFAULT_MODEL_FROM_CONFIG)
         return True, ""
@@ -285,24 +324,31 @@ def _ensure_db() -> tuple[bool, str]:
 
 _db_ready, _db_error = _ensure_db()
 if not _db_ready:
-    st.set_page_config(page_title="PAALSS Transcript Analyzer", page_icon="🗂️", layout="wide")
-    st.error(
-        "Database initialization failed. Check DATABASE_URL / Supabase connection settings.\n\n"
-        f"Details: {_db_error}"
-    )
-    st.info(
-        "If you are using Supabase on Streamlit Cloud, use the Supavisor session pooler connection string, not the direct db.<project-ref>.supabase.co host."
-    )
+    st.error(f"{t('db_init_failed')}\n\nDetails: {_db_error}")
+    st.info(t("db_init_help"))
     st.stop()
 
 
-def _login(user_id: str, role: str) -> None:
+def _persist_language(lang: str) -> None:
+    chosen = _normalize_lang(lang)
+    st.session_state["lang"] = chosen
+    cookies[LANGUAGE_COOKIE_KEY] = chosen
+    cookies.save()
+    if st.session_state.get("user_id"):
+        try:
+            set_user_language(str(st.session_state["user_id"]), chosen)
+        except Exception:
+            pass
+
+
+def _login(user_id: str, role: str, language: Optional[str] = None) -> None:
     token = create_session(user_id, role)
     cookies[COOKIE_KEY] = token
     cookies.save()
     st.session_state["user_id"] = user_id
     st.session_state["role"] = role
     st.session_state["session_token"] = token
+    _persist_language(language or get_user_language(user_id, st.session_state.get("lang", "en")))
 
 
 def _logout() -> None:
@@ -337,12 +383,12 @@ if "user_id" not in st.session_state:
             st.session_state["user_id"] = sess["user_id"]
             st.session_state["role"] = sess["role"]
             st.session_state["session_token"] = sess["token"]
+            _persist_language(get_user_language(sess["user_id"], st.session_state.get("lang", "en")))
 
 
 # ---------------- state helpers ----------------
 
 
-st.set_page_config(page_title=APP_TITLE, page_icon="🧾", layout="wide")
 
 st.markdown(
     """
@@ -369,7 +415,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.session_state.setdefault("lang", "en")
 st.session_state.setdefault("page", "analyzer")
 st.session_state.setdefault("uploader_nonce", 0)
 st.session_state.setdefault("suppress_autoload", False)
@@ -426,7 +471,7 @@ def _save_title() -> None:
     analysis_id = st.session_state.get("active_analysis_id")
     if not analysis_id:
         return
-    title = str(st.session_state.get("editor_title") or "").strip() or "Untitled transcript"
+    title = str(st.session_state.get("editor_title") or "").strip() or t("untitled_transcript")
     update_analysis(int(analysis_id), title=title)
     _notify_success(t("title_saved"))
 
@@ -481,8 +526,37 @@ def _ensure_active_selection() -> None:
 # ---------------- rendering ----------------
 
 
+def _set_language(lang: str) -> None:
+    chosen = _normalize_lang(lang)
+    _persist_language(chosen)
+
+
+def _select_english(prefix: str) -> None:
+    st.session_state[f"{prefix}_lang_en"] = True
+    st.session_state[f"{prefix}_lang_es"] = False
+    _set_language("en")
+
+
+def _select_spanish(prefix: str) -> None:
+    st.session_state[f"{prefix}_lang_en"] = False
+    st.session_state[f"{prefix}_lang_es"] = True
+    _set_language("es")
+
+
+def _render_language_checkboxes(prefix: str) -> None:
+    current = _normalize_lang(st.session_state.get("lang", "en"))
+    st.session_state[f"{prefix}_lang_en"] = current == "en"
+    st.session_state[f"{prefix}_lang_es"] = current == "es"
+    cols = st.columns(2)
+    with cols[0]:
+        st.checkbox("English", key=f"{prefix}_lang_en", on_change=_select_english, args=(prefix,))
+    with cols[1]:
+        st.checkbox("Español", key=f"{prefix}_lang_es", on_change=_select_spanish, args=(prefix,))
+
+
 def _render_login() -> None:
-    st.title(APP_TITLE)
+    st.title(_app_title())
+    _render_language_checkboxes("login")
     if not any_admin_exists():
         st.subheader(t("bootstrap_title"))
         st.caption(t("bootstrap_caption"))
@@ -492,10 +566,10 @@ def _render_login() -> None:
             submitted = st.form_submit_button(t("create_admin"))
         if submitted:
             if not username.strip() or not password:
-                st.error("Username and password are required.")
+                st.error(t("username_password_required"))
             else:
-                upsert_user(username.strip(), password, "admin")
-                _login(username.strip(), "admin")
+                upsert_user(username.strip(), password, "admin", language=st.session_state.get("lang", "en"))
+                _login(username.strip(), "admin", st.session_state.get("lang", "en"))
                 st.rerun()
         return
 
@@ -509,24 +583,17 @@ def _render_login() -> None:
         if not auth:
             st.error(t("invalid_credentials"))
         else:
-            _login(auth["user_id"], auth["role"])
+            _login(auth["user_id"], auth["role"], auth.get("language", st.session_state.get("lang", "en")))
             st.rerun()
 
 
 def _render_sidebar(models: List[str]) -> None:
     with st.sidebar:
-        st.markdown(f"## {APP_TITLE}")
-        lang_cols = st.columns(2)
-        with lang_cols[0]:
-            if st.button("English", use_container_width=True):
-                st.session_state["lang"] = "en"
-                st.rerun()
-        with lang_cols[1]:
-            if st.button("Español", use_container_width=True):
-                st.session_state["lang"] = "es"
-                st.rerun()
+        st.markdown(f"## {_app_title()}")
+        _render_language_checkboxes("sidebar")
 
-        st.caption(f"{t('signed_in_as')}: **{st.session_state['user_id']}** ({st.session_state['role']})")
+        role_key = 'role_admin' if st.session_state.get('role') == 'admin' else 'role_user'
+        st.caption(f"{t('signed_in_as')}: **{st.session_state['user_id']}** ({t(role_key)})")
         current_model = get_active_model(DEFAULT_MODEL_FROM_CONFIG)
         st.caption(f"**{t('active_model')}:** {current_model}")
 
@@ -611,14 +678,15 @@ def _render_admin_page(models: List[str]) -> None:
             st.rerun()
 
         st.subheader(t("prompt_editor"))
-        prompt_value = get_system_prompt(DEFAULT_SYSTEM_PROMPT)
+        current_lang = _normalize_lang(st.session_state.get("lang", "en"))
+        prompt_value = get_system_prompt(get_default_system_prompt(current_lang), current_lang)
         prompt_edit = st.text_area(t("prompt_editor"), value=prompt_value, height=520)
         pcols = st.columns([0.5, 0.5])
         if pcols[0].button(t("save_prompt"), type="primary", use_container_width=True):
-            set_system_prompt(prompt_edit)
+            set_system_prompt(prompt_edit, current_lang)
             _notify_success(t("prompt_saved"))
         if pcols[1].button(t("reset_prompt"), use_container_width=True):
-            set_system_prompt(DEFAULT_SYSTEM_PROMPT)
+            set_system_prompt(get_default_system_prompt(current_lang), current_lang)
             _notify_success(t("prompt_saved"))
             st.rerun()
 
@@ -627,11 +695,15 @@ def _render_admin_page(models: List[str]) -> None:
         with st.form("create_or_update_user_form"):
             username = st.text_input(t("username"))
             password = st.text_input(t("password"), type="password")
-            role = st.selectbox(t("role"), ["user", "admin"])
+            role = st.selectbox(
+                t("role"),
+                ["user", "admin"],
+                format_func=lambda x: t("role_admin") if x == "admin" else t("role_user"),
+            )
             submitted = st.form_submit_button(t("save_user"))
         if submitted:
             if not username.strip() or not password:
-                st.error("Username and password are required.")
+                st.error(t("username_password_required"))
             else:
                 upsert_user(username.strip(), password, role)
                 _notify_success(t("user_saved"))
@@ -640,14 +712,21 @@ def _render_admin_page(models: List[str]) -> None:
         st.subheader(t("existing_users"))
         rows = list_users()
         if rows:
-            st.dataframe(rows, use_container_width=True)
+            pretty_rows: List[Dict[str, Any]] = []
+            for row in rows:
+                pretty_rows.append({
+                    t("username"): row.get("user_id"),
+                    t("role"): t("role_admin") if row.get("role") == "admin" else t("role_user"),
+                    t("language"): "Español" if row.get("language") == "es" else "English",
+                })
+            st.dataframe(pretty_rows, use_container_width=True)
 
 
 def _render_analyzer_page() -> None:
     _ensure_active_selection()
     record = _current_record()
 
-    st.title(APP_TITLE)
+    st.title(_app_title())
 
     left, right = st.columns([0.56, 0.44], gap="large")
 
@@ -671,7 +750,7 @@ def _render_analyzer_page() -> None:
         meta = st.session_state.get("editor_meta") or {}
         if meta:
             st.markdown(f"**{t('detected_info')}**")
-            for key, label in [("learner_name", "Learner"), ("date_iso", "Date"), ("date_raw", "Date"), ("session", "Session"), ("sample", "Sample")]:
+            for key, label in [("learner_name", t("learner")), ("date_iso", t("date")), ("date_raw", t("date")), ("session", t("session")), ("sample", t("sample"))]:
                 value = meta.get(key)
                 if value:
                     st.caption(f"{label}: {value}")
@@ -709,10 +788,11 @@ def _render_analyzer_page() -> None:
                 st.error(t("saved_model_unavailable"))
                 return
 
-            current_prompt = get_system_prompt(DEFAULT_SYSTEM_PROMPT)
+            current_lang = _normalize_lang(st.session_state.get("lang", "en"))
+            current_prompt = get_system_prompt(get_default_system_prompt(current_lang), current_lang)
             update_analysis(
                 int(record["id"]),
-                title=str(st.session_state.get("editor_title") or record.get("title") or "Untitled transcript"),
+                title=str(st.session_state.get("editor_title") or record.get("title") or t("untitled_transcript")),
                 transcript_text=transcript_text,
                 meta=st.session_state.get("editor_meta") or {},
                 model_snapshot=saved_model,
@@ -760,6 +840,7 @@ def _render_analyzer_page() -> None:
                 recommendation_prompt = build_recommendation_user_prompt(
                     transcript_text=transcript_text,
                     report_text=report_acc,
+                    lang=current_lang,
                 )
                 recommendation_messages = [
                     {"role": "system", "content": current_prompt},
