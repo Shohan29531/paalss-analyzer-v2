@@ -271,18 +271,29 @@ if not cookies.ready():
 
 
 @st.cache_resource
-def _ensure_db() -> bool:
-    init_db()
-    return True
+def _ensure_db() -> tuple[bool, str]:
+    try:
+        init_db()
+        if not get_system_prompt(""):
+            set_system_prompt(DEFAULT_SYSTEM_PROMPT)
+        if not get_active_model(""):
+            set_active_model(DEFAULT_MODEL_FROM_CONFIG)
+        return True, ""
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
 
 
-_ensure_db()
-
-
-if not get_system_prompt(""):
-    set_system_prompt(DEFAULT_SYSTEM_PROMPT)
-if not get_active_model(""):
-    set_active_model(DEFAULT_MODEL_FROM_CONFIG)
+_db_ready, _db_error = _ensure_db()
+if not _db_ready:
+    st.set_page_config(page_title="PAALSS Transcript Analyzer", page_icon="🗂️", layout="wide")
+    st.error(
+        "Database initialization failed. Check DATABASE_URL / Supabase connection settings.\n\n"
+        f"Details: {_db_error}"
+    )
+    st.info(
+        "If you are using Supabase on Streamlit Cloud, use the Supavisor session pooler connection string, not the direct db.<project-ref>.supabase.co host."
+    )
+    st.stop()
 
 
 def _login(user_id: str, role: str) -> None:
