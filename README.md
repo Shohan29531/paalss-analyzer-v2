@@ -1,4 +1,4 @@
-# PAALSS Transcript Analyzer
+# PAALSS Transcript Analyzer (V2 - With User Account Support)
 
 A Streamlit app for generating two sequential outputs from Spanish aided AAC transcripts using an Ollama model:
 1. a PAALSS-style analysis report
