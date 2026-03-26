@@ -1,167 +1,169 @@
-# PAALSS Transcript Analyzer (V2 - With User Account Support)
+# PAALSS Transcript Analyzer v2
 
-A Streamlit app for generating two sequential outputs from Spanish aided AAC transcripts using an Ollama model:
+A Streamlit app for generating and saving two sequential outputs from Spanish aided AAC transcripts using an Ollama model:
 1. a PAALSS-style analysis report
-2. a separate recommendations document based on the transcript and the generated report
+2. a separate recommendations document grounded in the transcript and generated report
+
+This version adds:
+- username/password authentication
+- two roles: `admin` and `user`
+- persistent saved analyses in a database
+- a ChatGPT-style analysis list in the sidebar
+- global admin control over the active model and system prompt
 
 The app is intended for research and clinical drafting support. Its output is not diagnostic and should be reviewed by a qualified clinician or researcher.
 
-## What the app does
+## What changed in this version
 
-- Uploads a transcript in `.docx` or `.txt`
-- Extracts utterances and builds a numbered transcript block
-- Lets the user edit the exact transcript text that will be analyzed
-- Lets the user edit and save the base system prompt
-- Sends the saved prompt and transcript to a selected Ollama model
-- Generates the PAALSS report first, then generates a separate recommendations document
-- Displays both outputs in separate text areas
-- Supports `.docx` export for both outputs
-- Supports English and Spanish for the app interface
+### Authentication and roles
+- Every person must sign in with a username and password.
+- The first account ever created becomes the first `admin`.
+- `admin` users can:
+  - add/update users and admins
+  - change the global system prompt
+  - change the active model
+  - run analyses like any other user
+- `user` users can:
+  - upload transcripts
+  - edit transcripts
+  - run analyses
+  - reopen old analyses
+  - download saved outputs
 
-## Current UI behavior
+### Persistent saved analyses
+Each transcript upload creates a **new saved analysis record** with its own unique internal ID.
 
-### Credentials are hidden
-The app does not expose the Ollama host or API key in the interface.
+Even if the same file is uploaded twice:
+- both analyses are saved separately
+- there is no collision
+- each one has a distinct ID and timestamp
 
-It reads them from:
-- `st.secrets`
-- environment variables
+Saved data includes:
+- title
+- source filename
+- parsed transcript text
+- detected metadata
+- PAALSS report text
+- recommendations text
+- model snapshot used for that run
+- system prompt snapshot used for that run
+- created / updated timestamps
 
-This keeps the deployment safer for non-technical users and prevents the API key from appearing in the sidebar.
+### Sidebar workflow
+The left sidebar now behaves more like ChatGPT:
+- each uploaded transcript becomes its own saved entry
+- clicking an entry reloads that analysis
+- starting a new analysis clears the current selection without deleting past work
 
-### Model selection is explicit
-- The model dropdown is shown in the sidebar
-- The selected model is not committed until **Save model** is clicked
-- The saved model is stored in `.paalss_settings.json`
-- **Refresh model list** clears the cached model list and fetches available models again
+## Data storage
 
-### Base prompt editing is explicit
-- The prompt editor shows the current saved prompt
-- Edits are not used until **Save new prompt** is clicked
-- The saved prompt is stored in `.paalss_settings.json`
+### Local development
+If `DATABASE_URL` is not set, the app falls back to a local SQLite database:
+- `data/app.db`
 
-### Temperature is fixed
-Temperature is fixed internally at `0.2` for stable output formatting and is intentionally hidden from the UI.
+### Production / Supabase
+For deployment, the intended setup is:
+- **Supabase Postgres** via `DATABASE_URL`
+- Streamlit secrets for credentials
 
-### Transcript editing is direct
-The text shown in the transcript editor is the exact text sent to the model. Users can review and revise it before running analysis.
+No manual SQL migration is required for the initial setup.
+The app creates the required tables automatically at startup.
+
+## Required secrets
+
+Create `.streamlit/secrets.toml` locally, or paste the same contents into Streamlit Community Cloud secrets when deploying.
+
+```toml
+OLLAMA_HOST = "https://ollama.com"
+OLLAMA_API_KEY = "your-ollama-api-key"
+OLLAMA_MODEL = "qwen3.5:cloud"
+
+# Leave empty locally if you want SQLite instead of Postgres.
+DATABASE_URL = "postgresql://postgres:[YOUR-PASSWORD]@db.[YOUR-PROJECT-REF].supabase.co:5432/postgres"
+
+# Used to sign the auth cookie.
+COOKIE_SECRET = "replace-with-a-long-random-secret"
+```
+
+## Local setup
+
+### 1. Create a virtual environment
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
+
+### 2. Install dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### 3. Add secrets
+Copy the example file and edit it:
+```bash
+cp .streamlit/secrets.toml.example .streamlit/secrets.toml
+```
+
+### 4. Run the app
+```bash
+streamlit run app.py
+```
+
+## Supabase setup
+
+### Recommended connection choice
+Use a **Supabase Postgres connection string** in `DATABASE_URL`.
+
+For Streamlit Community Cloud, the simplest stable option is usually:
+- **Session pooler** if you want an IPv4-friendly pooled connection
+
+You can also use:
+- **Direct connection** if your environment supports it and you prefer it
+
+Avoid using the transaction pooler unless you specifically want that mode and know how your DB driver behaves with it.
+
+### What the app will create automatically
+At startup, the app will create these tables if they do not exist:
+- `users`
+- `sessions`
+- `settings`
+- `analyses`
+
+## Streamlit Community Cloud deployment
+
+1. Push this repo to GitHub.
+2. Create a new app in Streamlit Community Cloud.
+3. Point it to `app.py`.
+4. In the deployment flow or app settings, paste your secrets.
+5. Deploy.
+
+## First-time bootstrap flow
+
+On first launch:
+- if no admin exists, the app shows a bootstrap form
+- the first account created becomes the initial admin
+- that admin can then create all other users and admins from the admin page
 
 ## Project structure
 
 ```text
 .
 ├── app.py
+├── data/
 ├── lib/
 │   ├── docx_report.py
 │   ├── ollama.py
 │   ├── prompts.py
+│   ├── storage.py
 │   └── transcript_parser.py
-├── samples/
 ├── requirements.txt
 └── .streamlit/
-    ├── config.toml
     ├── secrets.toml
     └── secrets.toml.example
 ```
 
-## Local setup
-
-### 1. Install dependencies
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-### 2. Add your Ollama credentials
-
-Edit the local secrets file:
-
-```text
-.streamlit/secrets.toml
-```
-
-Example:
-
-```toml
-OLLAMA_HOST = "https://ollama.com"
-OLLAMA_API_KEY = "your-real-key-here"
-OLLAMA_MODEL = "qwen3.5:cloud"
-```
-
-You can also use environment variables instead:
-
-```bash
-export OLLAMA_HOST="https://ollama.com"
-export OLLAMA_API_KEY="your-real-key-here"
-```
-
-For local Ollama:
-
-```bash
-export OLLAMA_HOST="http://localhost:11434"
-```
-
-### 3. Run the app
-
-```bash
-streamlit run app.py
-```
-
-## How to use the app
-
-1. Upload a transcript file.
-2. Review and edit the numbered transcript block.
-3. Choose a model and click **Save model**.
-4. Open the **Base System Prompt** tab, edit the prompt if needed, and click **Save new prompt**.
-5. Click **Run analysis**.
-6. Review the PAALSS report in the first output box.
-7. Review the recommendations document in the second output box.
-8. Download either output as `.docx` if needed.
-
-## Output workflow
-
-When analysis is run, the app performs two model calls in sequence:
-
-1. It generates the PAALSS report.
-2. It then generates the recommendations document using the same saved system prompt, the transcript, and the completed PAALSS report.
-
-This keeps the recommendations grounded in the actual analysis instead of generating both documents independently.
-
-## Supported transcript input
-
-### `.docx`
-Best results come from transcript documents that clearly separate utterances, especially table-based formats with a numbered enunciado column.
-
-### `.txt`
-Plain text transcripts should ideally contain one utterance per line. Numbering such as `1. ...`, `2. ...` is acceptable.
-
-## Streamlit Community Cloud deployment
-
-1. Push the repo to GitHub.
-2. Create a new app in Streamlit Community Cloud.
-3. Point the app to `app.py`.
-4. In the app Secrets settings, add:
-
-```toml
-OLLAMA_HOST = "https://ollama.com"
-OLLAMA_API_KEY = "your-real-key-here"
-OLLAMA_MODEL = "qwen3.5:cloud"
-```
-
-5. Deploy.
-
-Notes:
-- Keep `.streamlit/secrets.toml` for local development only.
+## Security notes
 - Do not commit real secrets.
-- `requirements.txt` should remain in the repo root.
-
-## Local files generated by the app
-
-- `.paalss_settings.json` — stores the saved prompt, saved model, and UI language
-- `.streamlit/secrets.toml` — local secrets file for development
-
-## Security note
-
-Do not commit real API keys. If a key was ever exposed, rotate or revoke it immediately.
+- Do not commit `.streamlit/secrets.toml` with real values.
+- Rotate any key that was previously exposed.
+- Passwords are stored as salted password hashes, not plaintext.

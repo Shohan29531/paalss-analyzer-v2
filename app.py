@@ -1,164 +1,193 @@
-import json
+from __future__ import annotations
+
 import os
+import re
 from datetime import datetime
-from typing import Any, Dict, List
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 import streamlit as st
+from streamlit_cookies_manager_ext import EncryptedCookieManager
 
 from lib.docx_report import report_text_to_docx_bytes
 from lib.ollama import OllamaError, chat_once, chat_stream, list_models
 from lib.prompts import DEFAULT_SYSTEM_PROMPT, build_recommendation_user_prompt
+from lib.storage import (
+    any_admin_exists,
+    change_user_password,
+    create_analysis,
+    create_session,
+    delete_session,
+    get_active_model,
+    get_analysis,
+    get_session,
+    get_system_prompt,
+    init_db,
+    list_analyses_for_user,
+    list_users,
+    set_active_model,
+    set_system_prompt,
+    upsert_user,
+    update_analysis,
+    verify_user,
+)
 from lib.transcript_parser import (
     build_numbered_transcript_block,
     parse_transcript_docx,
     parse_transcript_txt,
 )
 
-# -----------------------------
-# i18n (UI language only)
-# -----------------------------
+APP_TITLE = "PAALSS Transcript Analyzer"
+PREFERRED_DEFAULT_MODEL = "qwen3.5:cloud"
+DEFAULT_TEMPERATURE = 0.2
+COOKIE_KEY = "paalss_session_token"
+
 STRINGS: Dict[str, Dict[str, str]] = {
     "en": {
         "language": "Language",
-        "app_title": "PAALSS Transcript Analyzer",
-        "connection": "Connection",
-        "ollama_host": "Ollama host",
-        "ollama_host_help": "Examples: https://ollama.com (Cloud) or http://localhost:11434 (Local)",
-        "api_key_caption": "Get your key here: [Ollama API keys](https://ollama.com/settings/keys)",
-        "api_key": "API key",
-        "api_key_placeholder": "Paste your Ollama API key",
-        "api_key_secret_hint": "Persistent local key: put it in .streamlit/secrets.toml. On Streamlit Community Cloud, add it in the app Secrets settings.",
-        "save_api_key": "Save API key",
-        "saved_api_key": "API key saved for this session",
-        "model": "Model",
-        "refresh_models": "Refresh model list",
-        "could_not_fetch_models": "Could not fetch model list from this host.",
+        "signed_in_as": "Signed in as",
+        "role_admin": "admin",
+        "role_user": "user",
+        "logout": "Logout",
+        "new_analysis": "Start new analysis",
+        "previous_analyses": "Previous analyses",
+        "no_previous_analyses": "No saved analyses yet.",
+        "bootstrap_title": "Create the first admin account",
+        "bootstrap_caption": "No admin exists yet. The first account created here becomes the admin.",
+        "username": "Username",
+        "password": "Password",
+        "login": "Login",
+        "create_admin": "Create admin",
+        "invalid_credentials": "Invalid credentials.",
+        "admin": "Admin",
+        "analyzer": "Analyzer",
+        "system_settings": "System settings",
+        "users": "Users",
+        "active_model": "Active model",
+        "refresh_models": "Refresh models",
         "save_model": "Save model",
-        "saved": "Saved",
-        "saved_model": "Saved model",
-        "tab_analyzer": "Analyzer",
-        "tab_prompt": "Base System Prompt",
-        "prompt_title": "Base System Prompt",
-        "prompt_caption": "Edit this prompt to control the structure and level of detail in the generated PAALSS report.",
-        "prompt_help": "Only the saved prompt is used when you run analysis.",
-        "save_prompt": "Save new prompt",
-        "saved_prompt": "Base system prompt saved",
-        "unsaved_prompt_changes": "You have unsaved prompt edits.",
+        "model_saved": "Active model saved.",
+        "models_unavailable": "Could not fetch models from the configured Ollama host. You can still type a model name manually.",
+        "prompt_editor": "System prompt",
+        "save_prompt": "Save prompt",
         "reset_prompt": "Reset prompt",
-        "download_prompt": "Download prompt",
-        "upload_step": "1) Upload transcript",
+        "prompt_saved": "System prompt saved.",
+        "create_or_update_user": "Create or update user",
+        "role": "Role",
+        "save_user": "Save user",
+        "user_saved": "User saved.",
+        "existing_users": "Existing users",
+        "change_password": "Change password",
+        "current_password": "Current password",
+        "new_password": "New password",
+        "update_password": "Update password",
+        "password_changed": "Password changed.",
+        "password_change_failed": "Could not change password. Check your current password.",
+        "upload_title": "Upload transcript",
+        "upload_help": "Each upload creates its own saved analysis entry on the left.",
         "uploader_label": "Upload a transcript (.docx or .txt)",
-        "uploader_drop": "Drag and drop file here",
-        "uploader_limit": "Limit 200MB per file • DOCX, TXT",
         "detected_info": "Detected sample info",
-        "learner": "Learner",
-        "date": "Date",
-        "session": "Session",
-        "sample": "Sample",
-        "edit_step": "2) Review / edit transcript sent to the model",
-        "transcript_placeholder": "Your transcript will appear here after upload…",
-        "transcript_help": "This exact text is what will be analyzed. You can edit it before running analysis.",
-        "generate_step": "3) Generate PAALSS report",
+        "title": "Title",
+        "save_title": "Save title",
+        "title_saved": "Title saved.",
+        "transcript_editor": "Transcript sent to the model",
+        "save_transcript": "Save transcript edits",
+        "transcript_saved": "Transcript saved.",
         "run_analysis": "Run analysis",
         "stream_output": "Stream output",
-        "err_missing_key": "Missing API key for Ollama Cloud. Paste it in the sidebar or set OLLAMA_API_KEY.",
-        "err_missing_transcript": "Please upload a transcript (or paste one) before running analysis.",
-        "err_saved_model_unavailable": "Saved model is not available on this host. Choose a model from the dropdown and click Save model.",
-        "user_prompt_intro": "Analyze the following transcript according to PAALSS and write the full report.",
-        "user_prompt_transcript": "TRANSCRIPT (numbered enunciados):",
-        "output": "Output",
-        "report_plain": "PAALSS report (plain text)",
-        "recommendation_plain": "Recommendations document (plain text)",
-        "download_report": "Download report (.docx)",
-        "download_recommendation": "Download recommendations (.docx)",
-        "info_run": "Run an analysis to see the generated outputs here.",
-        "user_prompt_recommendation_intro": "Using the transcript and the completed PAALSS report, write the separate recommendations document.",
+        "missing_transcript": "Please upload a transcript or open a saved analysis first.",
+        "missing_key": "Missing API key for Ollama Cloud. Set OLLAMA_API_KEY in secrets or environment variables.",
+        "saved_model_unavailable": "The saved model is not available on this host.",
         "generating_report": "Generating PAALSS report...",
         "generating_recommendation": "Generating recommendations document...",
-        "how_it_works": "How it works",
-        "how_body": (
-            "- Upload a transcript (.docx or .txt).\n"
-            "- The app extracts utterances and pre-fills a numbered transcript block.\n"
-            "- Edit the transcript block if needed.\n"
-            "- Edit the base system prompt in the “Base System Prompt” tab and click “Save new prompt”.\n"
-            "- Pick a model, click “Save model”, then run analysis.\n"
-            "- The app generates the PAALSS report first and then a separate recommendations document."
-        ),
+        "output": "Output",
+        "report": "PAALSS report",
+        "recommendations": "Recommendations document",
+        "download_report": "Download report (.docx)",
+        "download_recommendations": "Download recommendations (.docx)",
+        "no_output": "Run an analysis to generate and save outputs.",
+        "current_record": "Current analysis",
+        "filename": "Source file",
+        "created": "Created",
+        "updated": "Updated",
+        "id": "ID",
+        "user_prompt_intro": "Analyze the following transcript according to PAALSS and write the full report.",
+        "user_prompt_transcript": "TRANSCRIPT (numbered enunciados):",
+        "empty_state": "Upload a transcript to create the first saved analysis.",
     },
     "es": {
         "language": "Idioma",
-        "app_title": "Analizador de transcripciones PAALSS",
-        "connection": "Conexión",
-        "ollama_host": "Host de Ollama",
-        "ollama_host_help": "Ejemplos: https://ollama.com (Nube) o http://localhost:11434 (Local)",
-        "api_key_caption": "Consigue tu clave aquí: [Claves API de Ollama](https://ollama.com/settings/keys)",
-        "api_key": "Clave API",
-        "api_key_placeholder": "Pega tu clave API de Ollama",
-        "api_key_secret_hint": "Clave local persistente: colócala en .streamlit/secrets.toml. En Streamlit Community Cloud, agrégala en Secrets de la app.",
-        "save_api_key": "Guardar clave API",
-        "saved_api_key": "Clave API guardada para esta sesión",
-        "model": "Model",
-        "refresh_models": "Actualizar lista de modelos",
-        "could_not_fetch_models": "No se pudo obtener la lista de modelos de este host.",
+        "signed_in_as": "Sesión iniciada como",
+        "role_admin": "admin",
+        "role_user": "usuario",
+        "logout": "Cerrar sesión",
+        "new_analysis": "Iniciar nuevo análisis",
+        "previous_analyses": "Análisis anteriores",
+        "no_previous_analyses": "Aún no hay análisis guardados.",
+        "bootstrap_title": "Crear la primera cuenta de administrador",
+        "bootstrap_caption": "Todavía no existe un administrador. La primera cuenta creada aquí será admin.",
+        "username": "Usuario",
+        "password": "Contraseña",
+        "login": "Entrar",
+        "create_admin": "Crear admin",
+        "invalid_credentials": "Credenciales inválidas.",
+        "admin": "Administración",
+        "analyzer": "Analizador",
+        "system_settings": "Configuración del sistema",
+        "users": "Usuarios",
+        "active_model": "Modelo activo",
+        "refresh_models": "Actualizar modelos",
         "save_model": "Guardar modelo",
-        "saved": "Guardado",
-        "saved_model": "Modelo guardado",
-        "tab_analyzer": "Analizador",
-        "tab_prompt": "Prompt base del sistema",
-        "prompt_title": "Prompt base del sistema",
-        "prompt_caption": "Edita este prompt para controlar la estructura y el nivel de detalle del informe PAALSS generado.",
-        "prompt_help": "Solo se usa el prompt guardado al ejecutar el análisis.",
-        "save_prompt": "Guardar nuevo prompt",
-        "saved_prompt": "Prompt base del sistema guardado",
-        "unsaved_prompt_changes": "Hay cambios sin guardar en el prompt.",
+        "model_saved": "Modelo activo guardado.",
+        "models_unavailable": "No se pudieron obtener los modelos del host de Ollama configurado. Aun así puedes escribir el nombre del modelo manualmente.",
+        "prompt_editor": "Prompt del sistema",
+        "save_prompt": "Guardar prompt",
         "reset_prompt": "Restablecer prompt",
-        "download_prompt": "Descargar prompt",
-        "upload_step": "1) Subir transcripción",
+        "prompt_saved": "Prompt del sistema guardado.",
+        "create_or_update_user": "Crear o actualizar usuario",
+        "role": "Rol",
+        "save_user": "Guardar usuario",
+        "user_saved": "Usuario guardado.",
+        "existing_users": "Usuarios existentes",
+        "change_password": "Cambiar contraseña",
+        "current_password": "Contraseña actual",
+        "new_password": "Nueva contraseña",
+        "update_password": "Actualizar contraseña",
+        "password_changed": "Contraseña actualizada.",
+        "password_change_failed": "No se pudo cambiar la contraseña. Revisa la contraseña actual.",
+        "upload_title": "Subir transcripción",
+        "upload_help": "Cada archivo subido crea su propia entrada guardada en la izquierda.",
         "uploader_label": "Sube una transcripción (.docx o .txt)",
-        "uploader_drop": "Arrastra y suelta el archivo aquí",
-        "uploader_limit": "Límite 200 MB por archivo • DOCX, TXT",
         "detected_info": "Información detectada de la muestra",
-        "learner": "Participante",
-        "date": "Fecha",
-        "session": "Sesión",
-        "sample": "Muestra",
-        "edit_step": "2) Revisar / editar transcripción enviada al modelo",
-        "transcript_placeholder": "Tu transcripción aparecerá aquí después de subirla…",
-        "transcript_help": "Este texto exacto es lo que se analizará. Puedes editarlo antes de ejecutar el análisis.",
-        "generate_step": "3) Generar informe PAALSS",
+        "title": "Título",
+        "save_title": "Guardar título",
+        "title_saved": "Título guardado.",
+        "transcript_editor": "Transcripción enviada al modelo",
+        "save_transcript": "Guardar cambios de la transcripción",
+        "transcript_saved": "Transcripción guardada.",
         "run_analysis": "Ejecutar análisis",
         "stream_output": "Transmitir salida",
-        "err_missing_key": "Falta la clave API para Ollama Cloud. Pégala en la barra lateral o configura OLLAMA_API_KEY.",
-        "err_missing_transcript": "Sube una transcripción (o pégala) antes de ejecutar el análisis.",
-        "err_saved_model_unavailable": "El modelo guardado no está disponible en este host. Elige un modelo y haz clic en Guardar modelo.",
-        "user_prompt_intro": "Analiza la siguiente transcripción según PAALSS y escribe el informe completo.",
-        "user_prompt_transcript": "TRANSCRIPCIÓN (enunciados numerados):",
-        "output": "Salida",
-        "report_plain": "Informe PAALSS (texto plano)",
-        "recommendation_plain": "Documento de recomendaciones (texto plano)",
-        "download_report": "Descargar informe (.docx)",
-        "download_recommendation": "Descargar recomendaciones (.docx)",
-        "info_run": "Ejecuta un análisis para ver las salidas generadas aquí.",
-        "user_prompt_recommendation_intro": "Usando la transcripción y el informe PAALSS ya completado, redacta el documento separado de recomendaciones.",
+        "missing_transcript": "Primero sube una transcripción o abre un análisis guardado.",
+        "missing_key": "Falta la clave API para Ollama Cloud. Configura OLLAMA_API_KEY en secrets o variables de entorno.",
+        "saved_model_unavailable": "El modelo guardado no está disponible en este host.",
         "generating_report": "Generando informe PAALSS...",
         "generating_recommendation": "Generando documento de recomendaciones...",
-        "how_it_works": "Cómo funciona",
-        "how_body": (
-            "- Sube una transcripción (.docx o .txt).\n"
-            "- La app extrae enunciados y pre-rellena un bloque numerado.\n"
-            "- Edita el bloque si hace falta.\n"
-            "- Edita el prompt base en la pestaña “Prompt base del sistema” y haz clic en “Guardar nuevo prompt”.\n"
-            "- Elige un modelo, haz clic en “Guardar modelo” y ejecuta el análisis.\n"
-            "- La app genera primero el informe PAALSS y luego un documento separado de recomendaciones."
-        ),
+        "output": "Salida",
+        "report": "Informe PAALSS",
+        "recommendations": "Documento de recomendaciones",
+        "download_report": "Descargar informe (.docx)",
+        "download_recommendations": "Descargar recomendaciones (.docx)",
+        "no_output": "Ejecuta un análisis para generar y guardar salidas.",
+        "current_record": "Análisis actual",
+        "filename": "Archivo fuente",
+        "created": "Creado",
+        "updated": "Actualizado",
+        "id": "ID",
+        "user_prompt_intro": "Analiza la siguiente transcripción según PAALSS y escribe el informe completo.",
+        "user_prompt_transcript": "TRANSCRIPCIÓN (enunciados numerados):",
+        "empty_state": "Sube una transcripción para crear el primer análisis guardado.",
     },
 }
-
-
-DEFAULT_TEMPERATURE = 0.2
-APP_TITLE = "PAALSS Transcript Analyzer"
-PREFERRED_DEFAULT_MODEL = "qwen3.5:cloud"
-SETTINGS_FILE = os.path.join(os.path.dirname(__file__), ".paalss_settings.json")
 
 
 def t(key: str) -> str:
@@ -166,16 +195,184 @@ def t(key: str) -> str:
     return STRINGS.get(lang, STRINGS["en"]).get(key, STRINGS["en"].get(key, key))
 
 
+# ---------------- configuration helpers ----------------
+
+
 def _cfg(key: str, default: str = "") -> str:
-    """Priority: st.secrets -> env -> default."""
     try:
         if key in st.secrets:
-            val = str(st.secrets[key])
-            if val:
-                return val
+            value = st.secrets.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
     except Exception:
         pass
-    return os.environ.get(key, default)
+    return os.environ.get(key, default).strip()
+
+
+OLLAMA_HOST = _cfg("OLLAMA_HOST", "https://ollama.com")
+OLLAMA_API_KEY = _cfg("OLLAMA_API_KEY", "")
+COOKIE_SECRET = _cfg("COOKIE_SECRET", _cfg("COOKIE_PASSWORD", "change-me"))
+DEFAULT_MODEL_FROM_CONFIG = _cfg("OLLAMA_MODEL", PREFERRED_DEFAULT_MODEL)
+
+
+def _normalize_host(host: str) -> str:
+    h = (host or "").strip().rstrip("/")
+    if h.endswith("/api"):
+        h = h[:-4]
+    return h
+
+
+OLLAMA_HOST = _normalize_host(OLLAMA_HOST)
+
+
+def _is_cloud_host(host: str) -> bool:
+    return host.startswith("https://ollama.com") or host.startswith("http://ollama.com")
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _get_models_cached(host: str, api_key: str) -> List[str]:
+    models = list_models(host, api_key=api_key)
+    return sorted({m for m in models if m and isinstance(m, str)})
+
+
+def _title_from_first_line(text: str, max_chars: int = 72) -> str:
+    line = ""
+    for raw in (text or "").splitlines():
+        cleaned = re.sub(r"^\s*\d+\s*[.)-]\s*", "", raw).strip()
+        if cleaned:
+            line = cleaned
+            break
+    if not line:
+        return "Untitled transcript"
+    line = re.sub(r"\s+", " ", line).strip("`\"' ")
+    return line if len(line) <= max_chars else line[: max_chars - 1].rstrip() + "…"
+
+
+def _derive_title(filename: str, transcript_text: str, meta: Dict[str, Any]) -> str:
+    learner = str(meta.get("learner_name") or "").strip()
+    date = str(meta.get("date_iso") or meta.get("date_raw") or "").strip()
+    first_line = _title_from_first_line(transcript_text)
+    if learner and date:
+        return f"{learner} — {date}"
+    if learner:
+        return learner
+    if first_line and first_line != "Untitled transcript":
+        return first_line
+    stem = Path(filename or "transcript").stem.strip()
+    return stem or "Untitled transcript"
+
+
+# ---------------- cookies / auth ----------------
+
+
+cookies = EncryptedCookieManager(prefix="paalss_auth", password=COOKIE_SECRET)
+if not cookies.ready():
+    st.stop()
+
+
+@st.cache_resource
+def _ensure_db() -> bool:
+    init_db()
+    return True
+
+
+_ensure_db()
+
+
+if not get_system_prompt(""):
+    set_system_prompt(DEFAULT_SYSTEM_PROMPT)
+if not get_active_model(""):
+    set_active_model(DEFAULT_MODEL_FROM_CONFIG)
+
+
+def _login(user_id: str, role: str) -> None:
+    token = create_session(user_id, role)
+    cookies[COOKIE_KEY] = token
+    cookies.save()
+    st.session_state["user_id"] = user_id
+    st.session_state["role"] = role
+    st.session_state["session_token"] = token
+
+
+def _logout() -> None:
+    token = st.session_state.get("session_token") or cookies.get(COOKIE_KEY)
+    if token:
+        try:
+            delete_session(str(token))
+        except Exception:
+            pass
+    cookies[COOKIE_KEY] = ""
+    cookies.save()
+    for key in [
+        "user_id",
+        "role",
+        "session_token",
+        "active_analysis_id",
+        "editor_title",
+        "editor_transcript_text",
+        "editor_source_filename",
+        "editor_meta",
+        "report_text",
+        "recommendation_text",
+    ]:
+        st.session_state.pop(key, None)
+
+
+if "user_id" not in st.session_state:
+    token = cookies.get(COOKIE_KEY)
+    if token:
+        sess = get_session(str(token))
+        if sess:
+            st.session_state["user_id"] = sess["user_id"]
+            st.session_state["role"] = sess["role"]
+            st.session_state["session_token"] = sess["token"]
+
+
+# ---------------- state helpers ----------------
+
+
+st.set_page_config(page_title=APP_TITLE, page_icon="🧾", layout="wide")
+
+st.markdown(
+    """
+<style>
+  section[data-testid="stSidebar"] > div:first-child {
+    padding-top: 0.6rem;
+  }
+  div.block-container {
+    max-width: 100% !important;
+    padding-left: 1.2rem;
+    padding-right: 1.2rem;
+    padding-top: 1rem !important;
+  }
+  .paalss-thread-btn button {
+    text-align: left !important;
+    justify-content: flex-start !important;
+    white-space: normal !important;
+    height: auto !important;
+    padding-top: 0.55rem !important;
+    padding-bottom: 0.55rem !important;
+  }
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+st.session_state.setdefault("lang", "en")
+st.session_state.setdefault("page", "analyzer")
+st.session_state.setdefault("uploader_nonce", 0)
+st.session_state.setdefault("suppress_autoload", False)
+
+
+def _fmt_ts(value: Any) -> str:
+    s = str(value or "")
+    if not s:
+        return ""
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return s
 
 
 def _notify_success(message: str) -> None:
@@ -185,436 +382,469 @@ def _notify_success(message: str) -> None:
         st.success(message)
 
 
-def _strip_trailing_slash(s: str) -> str:
-    return (s or "").strip().rstrip("/")
+def _record_accessible(record: Optional[Dict[str, Any]]) -> bool:
+    if not record:
+        return False
+    current_user = st.session_state.get("user_id")
+    return str(record.get("user_id") or "") == str(current_user or "")
 
 
-def _normalize_host(host: str) -> str:
-    """Allow users to paste https://ollama.com or https://ollama.com/api; normalize to base host."""
-    h = _strip_trailing_slash(host)
-    if h.endswith("/api"):
-        h = h[:-4]
-    return h
+def _load_analysis_into_state(analysis_id: int) -> None:
+    record = get_analysis(int(analysis_id))
+    if not _record_accessible(record):
+        return
+    st.session_state["active_analysis_id"] = int(analysis_id)
+    st.session_state["suppress_autoload"] = False
+    st.session_state["editor_title"] = str(record.get("title") or "")
+    st.session_state["editor_transcript_text"] = str(record.get("transcript_text") or "")
+    st.session_state["editor_source_filename"] = str(record.get("source_filename") or "")
+    st.session_state["editor_meta"] = record.get("meta") or {}
+    st.session_state["report_text"] = str(record.get("report_text") or "")
+    st.session_state["recommendation_text"] = str(record.get("recommendation_text") or "")
 
 
-def _load_settings() -> Dict[str, Any]:
-    try:
-        if os.path.exists(SETTINGS_FILE):
-            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f) or {}
-    except Exception:
-        pass
-    return {}
+def _current_record() -> Optional[Dict[str, Any]]:
+    analysis_id = st.session_state.get("active_analysis_id")
+    if not analysis_id:
+        return None
+    record = get_analysis(int(analysis_id))
+    return record if _record_accessible(record) else None
 
 
-def _save_settings(d: Dict[str, Any]) -> None:
-    try:
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(d, f, indent=2, ensure_ascii=False)
-    except Exception:
-        pass
+def _save_title() -> None:
+    analysis_id = st.session_state.get("active_analysis_id")
+    if not analysis_id:
+        return
+    title = str(st.session_state.get("editor_title") or "").strip() or "Untitled transcript"
+    update_analysis(int(analysis_id), title=title)
+    _notify_success(t("title_saved"))
 
 
-def _save_settings_merged(update: Dict[str, Any]) -> None:
-    settings = _load_settings()
-    settings.update(update)
-    _save_settings(settings)
-
-
-@st.cache_data(ttl=120)
-def _get_models_cached(host: str, api_key: str) -> List[str]:
-    models = list_models(host, api_key=api_key)
-    return sorted({m for m in models if m and isinstance(m, str)})
-
-
-def _is_cloud_host(host: str) -> bool:
-    return host.startswith("https://ollama.com") or host.startswith("http://ollama.com")
-
-
-def _set_lang(lang: str) -> None:
-    lang = "es" if lang == "es" else "en"
-    st.session_state.lang = lang
-    st.session_state.lang_en = lang == "en"
-    st.session_state.lang_es = lang == "es"
-    _save_settings_merged({"lang": lang})
-
-
-def _on_lang_en_change() -> None:
-    if st.session_state.lang_en:
-        _set_lang("en")
-    else:
-        if st.session_state.get("lang_es"):
-            _set_lang("es")
-        else:
-            st.session_state.lang_en = True
-            _set_lang("en")
-
-
-def _on_lang_es_change() -> None:
-    if st.session_state.lang_es:
-        _set_lang("es")
-    else:
-        _set_lang("en")
-
-
-st.set_page_config(
-    page_title=APP_TITLE,
-    page_icon="🧾",
-    layout="wide",
-)
-
-settings_boot = _load_settings()
-
-if "lang" not in st.session_state:
-    raw = str(settings_boot.get("lang") or "").strip().lower()
-    st.session_state.lang = "es" if raw in ("es", "spanish", "español", "espanol") else "en"
-
-if "lang_en" not in st.session_state:
-    st.session_state.lang_en = st.session_state.lang == "en"
-
-if "lang_es" not in st.session_state:
-    st.session_state.lang_es = st.session_state.lang == "es"
-
-if "system_prompt" not in st.session_state:
-    st.session_state.system_prompt = str(settings_boot.get("system_prompt") or DEFAULT_SYSTEM_PROMPT)
-
-if "prompt_editor" not in st.session_state:
-    st.session_state.prompt_editor = st.session_state.system_prompt
-
-if "transcript_text" not in st.session_state:
-    st.session_state.transcript_text = ""
-
-if "report_text" not in st.session_state:
-    st.session_state.report_text = ""
-
-if "recommendation_text" not in st.session_state:
-    st.session_state.recommendation_text = ""
-
-if "meta" not in st.session_state:
-    st.session_state.meta = {}
-
-if "saved_model" not in st.session_state:
-    st.session_state.saved_model = ""
-
-if "model_pick" not in st.session_state:
-    st.session_state.model_pick = ""
-
-hidden_host = _normalize_host(_cfg("OLLAMA_HOST", "https://ollama.com"))
-hidden_api_key = _cfg("OLLAMA_API_KEY", "").strip()
-host = hidden_host
-api_key = hidden_api_key
-
-
-with st.sidebar:
-    st.markdown(f"### {t('language')}")
-    lcols = st.columns(2)
-    with lcols[0]:
-        st.checkbox("English", key="lang_en", on_change=_on_lang_en_change)
-    with lcols[1]:
-        st.checkbox("Español", key="lang_es", on_change=_on_lang_es_change)
-
-    st.divider()
-    st.markdown(f"## {t('app_title')}")
-
-    models: List[str] = []
-    models_err = ""
-    if api_key or not _is_cloud_host(host):
-        try:
-            models = _get_models_cached(host, api_key)
-        except Exception as e:
-            models_err = str(e)
-            models = []
-
-    if models_err:
-        st.caption(t("could_not_fetch_models"))
-
-    if not st.session_state.saved_model:
-        persisted = str(settings_boot.get("model") or "").strip()
-        if persisted:
-            chosen = persisted
-        elif PREFERRED_DEFAULT_MODEL:
-            chosen = PREFERRED_DEFAULT_MODEL
-        else:
-            chosen = ""
-
-        if models and chosen not in models:
-            preferred_base = chosen.split(":", 1)[0] if chosen else ""
-            candidates = [m for m in models if preferred_base and preferred_base in m]
-            chosen = candidates[0] if candidates else models[0]
-
-        st.session_state.saved_model = chosen
-        st.session_state.model_pick = chosen
-
-    options = models[:] if models else []
-    if st.session_state.saved_model and st.session_state.saved_model not in options:
-        options = [st.session_state.saved_model] + options
-    if PREFERRED_DEFAULT_MODEL and PREFERRED_DEFAULT_MODEL not in options:
-        options = [PREFERRED_DEFAULT_MODEL] + options
-
-    seen = set()
-    options = [m for m in options if not (m in seen or seen.add(m))]
-
-    if not options:
-        options = [PREFERRED_DEFAULT_MODEL]
-
-    st.selectbox(
-        t("model"),
-        options=options,
-        index=options.index(st.session_state.model_pick) if st.session_state.model_pick in options else 0,
-        key="model_pick",
+def _save_transcript() -> None:
+    analysis_id = st.session_state.get("active_analysis_id")
+    if not analysis_id:
+        return
+    update_analysis(
+        int(analysis_id),
+        transcript_text=str(st.session_state.get("editor_transcript_text") or ""),
+        meta=st.session_state.get("editor_meta") or {},
     )
-
-    save_cols = st.columns([0.55, 0.45])
-    with save_cols[0]:
-        if st.button(t("save_model"), type="primary", use_container_width=True):
-            st.session_state.saved_model = st.session_state.model_pick
-            _save_settings_merged({"model": st.session_state.saved_model})
-            _notify_success(t("saved"))
-    with save_cols[1]:
-        st.caption("")
-
-    st.caption(f"{t('saved_model')}: `{st.session_state.saved_model}`")
-    if st.button(t("refresh_models"), use_container_width=True):
-        st.cache_data.clear()
+    _notify_success(t("transcript_saved"))
 
 
-st.markdown(
-    """
-<style>
-  div.block-container {
-    max-width: 100% !important;
-    padding-left: 1.25rem;
-    padding-right: 1.25rem;
-    padding-top: 4.25rem !important;
-  }
-
-  div[data-testid="stFileUploaderDropzoneInstructions"] { display: none !important; }
-</style>
-""",
-    unsafe_allow_html=True,
-)
-
-
-tabs = st.tabs([t("tab_analyzer"), t("tab_prompt")])
-
-with tabs[1]:
-    st.markdown(f"### {t('prompt_title')}")
-    st.caption(t("prompt_caption"))
-
-    st.text_area(
-        "",
-        key="prompt_editor",
-        height=720,
-        help=t("prompt_help"),
+def _create_analysis_from_upload(uploaded: Any) -> None:
+    if uploaded is None:
+        return
+    if uploaded.name.lower().endswith(".docx"):
+        parsed = parse_transcript_docx(uploaded.getvalue())
+    else:
+        parsed = parse_transcript_txt(uploaded.getvalue().decode("utf-8", errors="ignore"))
+    transcript_text = build_numbered_transcript_block(parsed.utterances)
+    meta = parsed.meta or {}
+    title = _derive_title(uploaded.name, transcript_text, meta)
+    analysis_id = create_analysis(
+        user_id=str(st.session_state["user_id"]),
+        role=str(st.session_state["role"]),
+        title=title,
+        source_filename=str(uploaded.name),
+        transcript_text=transcript_text,
+        meta=meta,
     )
+    _load_analysis_into_state(int(analysis_id))
+    st.session_state["uploader_nonce"] = int(st.session_state.get("uploader_nonce", 0)) + 1
+    st.rerun()
 
-    if st.session_state.prompt_editor != st.session_state.system_prompt:
-        st.info(t("unsaved_prompt_changes"))
 
-    pcols = st.columns([0.25, 0.25, 0.25, 0.25])
-    with pcols[0]:
-        if st.button(t("save_prompt"), type="primary", use_container_width=True):
-            st.session_state.system_prompt = st.session_state.prompt_editor
-            _save_settings_merged({"system_prompt": st.session_state.system_prompt})
-            _notify_success(t("saved_prompt"))
-    with pcols[1]:
-        if st.button(t("reset_prompt"), use_container_width=True):
-            st.session_state.system_prompt = DEFAULT_SYSTEM_PROMPT
-            st.session_state.prompt_editor = DEFAULT_SYSTEM_PROMPT
-            _save_settings_merged({"system_prompt": DEFAULT_SYSTEM_PROMPT})
-            _notify_success(t("saved_prompt"))
+def _ensure_active_selection() -> None:
+    if st.session_state.get("suppress_autoload"):
+        return
+    if st.session_state.get("active_analysis_id"):
+        record = _current_record()
+        if record:
+            return
+    rows = list_analyses_for_user(str(st.session_state.get("user_id") or ""), limit=200)
+    if rows:
+        _load_analysis_into_state(int(rows[0]["id"]))
+
+
+# ---------------- rendering ----------------
+
+
+def _render_login() -> None:
+    st.title(APP_TITLE)
+    if not any_admin_exists():
+        st.subheader(t("bootstrap_title"))
+        st.caption(t("bootstrap_caption"))
+        with st.form("bootstrap_admin_form"):
+            username = st.text_input(t("username"))
+            password = st.text_input(t("password"), type="password")
+            submitted = st.form_submit_button(t("create_admin"))
+        if submitted:
+            if not username.strip() or not password:
+                st.error("Username and password are required.")
+            else:
+                upsert_user(username.strip(), password, "admin")
+                _login(username.strip(), "admin")
+                st.rerun()
+        return
+
+    st.subheader(t("login"))
+    with st.form("login_form"):
+        username = st.text_input(t("username"))
+        password = st.text_input(t("password"), type="password")
+        submitted = st.form_submit_button(t("login"))
+    if submitted:
+        auth = verify_user(username.strip(), password)
+        if not auth:
+            st.error(t("invalid_credentials"))
+        else:
+            _login(auth["user_id"], auth["role"])
             st.rerun()
-    with pcols[2]:
-        st.download_button(
-            t("download_prompt"),
-            data=st.session_state.prompt_editor.encode("utf-8"),
-            file_name="paalss_system_prompt.txt",
-            mime="text/plain",
-            use_container_width=True,
-        )
 
-with tabs[0]:
-    left, right = st.columns([0.55, 0.45], gap="large")
+
+def _render_sidebar(models: List[str]) -> None:
+    with st.sidebar:
+        st.markdown(f"## {APP_TITLE}")
+        lang_cols = st.columns(2)
+        with lang_cols[0]:
+            if st.button("English", use_container_width=True):
+                st.session_state["lang"] = "en"
+                st.rerun()
+        with lang_cols[1]:
+            if st.button("Español", use_container_width=True):
+                st.session_state["lang"] = "es"
+                st.rerun()
+
+        st.caption(f"{t('signed_in_as')}: **{st.session_state['user_id']}** ({st.session_state['role']})")
+        current_model = get_active_model(DEFAULT_MODEL_FROM_CONFIG)
+        st.caption(f"**{t('active_model')}:** {current_model}")
+
+        if st.session_state.get("role") == "admin":
+            st.radio(
+                "",
+                options=["analyzer", "admin"],
+                format_func=lambda x: t("analyzer") if x == "analyzer" else t("admin"),
+                key="page",
+                horizontal=True,
+                label_visibility="collapsed",
+            )
+
+        if st.button(t("new_analysis"), use_container_width=True):
+            st.session_state["suppress_autoload"] = True
+            for key in [
+                "active_analysis_id",
+                "editor_title",
+                "editor_transcript_text",
+                "editor_source_filename",
+                "editor_meta",
+                "report_text",
+                "recommendation_text",
+            ]:
+                st.session_state.pop(key, None)
+            st.rerun()
+
+        st.markdown(f"### {t('previous_analyses')}")
+        rows = list_analyses_for_user(str(st.session_state["user_id"]), limit=200)
+        if rows:
+            for row in rows:
+                rid = int(row["id"])
+                label = str(row.get("title") or row.get("source_filename") or f"Analysis {rid}")
+                ts = _fmt_ts(row.get("updated_at"))
+                text = f"{label}\n{ts}" if ts else label
+                st.markdown('<div class="paalss-thread-btn">', unsafe_allow_html=True)
+                if st.button(text, key=f"analysis_btn_{rid}", use_container_width=True):
+                    _load_analysis_into_state(rid)
+                    st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            st.caption(t("no_previous_analyses"))
+
+        with st.expander(t("change_password")):
+            current_pw = st.text_input(t("current_password"), type="password", key="cp_current")
+            new_pw = st.text_input(t("new_password"), type="password", key="cp_new")
+            if st.button(t("update_password"), use_container_width=True):
+                if change_user_password(str(st.session_state["user_id"]), current_pw, new_pw):
+                    _notify_success(t("password_changed"))
+                else:
+                    st.error(t("password_change_failed"))
+
+        if st.button(t("logout"), use_container_width=True):
+            _logout()
+            st.rerun()
+
+
+def _render_admin_page(models: List[str]) -> None:
+    st.title(t("admin"))
+    tab_system, tab_users = st.tabs([t("system_settings"), t("users")])
+
+    with tab_system:
+        st.subheader(t("active_model"))
+        current_model = get_active_model(DEFAULT_MODEL_FROM_CONFIG)
+        options = models[:] if models else []
+        if current_model and current_model not in options:
+            options = [current_model] + options
+        model_index = options.index(current_model) if current_model in options else 0
+
+        if options:
+            picked_model = st.selectbox(t("active_model"), options, index=model_index)
+        else:
+            picked_model = st.text_input(t("active_model"), value=current_model)
+            st.caption(t("models_unavailable"))
+
+        cols = st.columns([0.5, 0.5])
+        if cols[0].button(t("save_model"), type="primary", use_container_width=True):
+            set_active_model(str(picked_model).strip())
+            _notify_success(t("model_saved"))
+        if cols[1].button(t("refresh_models"), use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+
+        st.subheader(t("prompt_editor"))
+        prompt_value = get_system_prompt(DEFAULT_SYSTEM_PROMPT)
+        prompt_edit = st.text_area(t("prompt_editor"), value=prompt_value, height=520)
+        pcols = st.columns([0.5, 0.5])
+        if pcols[0].button(t("save_prompt"), type="primary", use_container_width=True):
+            set_system_prompt(prompt_edit)
+            _notify_success(t("prompt_saved"))
+        if pcols[1].button(t("reset_prompt"), use_container_width=True):
+            set_system_prompt(DEFAULT_SYSTEM_PROMPT)
+            _notify_success(t("prompt_saved"))
+            st.rerun()
+
+    with tab_users:
+        st.subheader(t("create_or_update_user"))
+        with st.form("create_or_update_user_form"):
+            username = st.text_input(t("username"))
+            password = st.text_input(t("password"), type="password")
+            role = st.selectbox(t("role"), ["user", "admin"])
+            submitted = st.form_submit_button(t("save_user"))
+        if submitted:
+            if not username.strip() or not password:
+                st.error("Username and password are required.")
+            else:
+                upsert_user(username.strip(), password, role)
+                _notify_success(t("user_saved"))
+                st.rerun()
+
+        st.subheader(t("existing_users"))
+        rows = list_users()
+        if rows:
+            st.dataframe(rows, use_container_width=True)
+
+
+def _render_analyzer_page() -> None:
+    _ensure_active_selection()
+    record = _current_record()
+
+    st.title(APP_TITLE)
+
+    left, right = st.columns([0.56, 0.44], gap="large")
 
     with left:
-        st.markdown(f"### {t('upload_step')}")
-        st.caption(t("uploader_limit"))
-
+        st.subheader(t("upload_title"))
+        st.caption(t("upload_help"))
         uploaded = st.file_uploader(
             t("uploader_label"),
             type=["docx", "txt"],
             accept_multiple_files=False,
+            key=f"transcript_uploader_{st.session_state.get('uploader_nonce', 0)}",
         )
-
         if uploaded is not None:
-            if uploaded.name.lower().endswith(".docx"):
-                data = parse_transcript_docx(uploaded.getvalue())
-            else:
-                data = parse_transcript_txt(uploaded.getvalue().decode("utf-8", errors="ignore"))
+            _create_analysis_from_upload(uploaded)
 
-            st.session_state.meta = data.meta
-            st.session_state.transcript_text = build_numbered_transcript_block(data.utterances)
+        record = _current_record()
+        if not record:
+            st.info(t("empty_state"))
+            return
 
-        meta: Dict[str, Any] = st.session_state.meta or {}
+        meta = st.session_state.get("editor_meta") or {}
         if meta:
             st.markdown(f"**{t('detected_info')}**")
-            meta_lines: List[str] = []
-            if meta.get("learner_name"):
-                meta_lines.append(f"- {t('learner')}: {meta['learner_name']}")
-            if meta.get("date_iso"):
-                meta_lines.append(f"- {t('date')}: {meta['date_iso']}")
-            elif meta.get("date_raw"):
-                meta_lines.append(f"- {t('date')}: {meta['date_raw']}")
-            if meta.get("session"):
-                meta_lines.append(f"- {t('session')}: {meta['session']}")
-            if meta.get("sample"):
-                meta_lines.append(f"- {t('sample')}: {meta['sample']}")
-            st.markdown("\n".join(meta_lines))
+            for key, label in [("learner_name", "Learner"), ("date_iso", "Date"), ("date_raw", "Date"), ("session", "Session"), ("sample", "Sample")]:
+                value = meta.get(key)
+                if value:
+                    st.caption(f"{label}: {value}")
 
-        st.markdown(f"### {t('edit_step')}")
-        st.session_state.transcript_text = st.text_area(
-            "",
-            value=st.session_state.transcript_text,
-            height=420,
-            placeholder=t("transcript_placeholder"),
-            help=t("transcript_help"),
-        )
+        st.text_input(t("title"), key="editor_title")
+        title_cols = st.columns([0.4, 0.6])
+        if title_cols[0].button(t("save_title"), use_container_width=True):
+            _save_title()
 
-        st.markdown(f"### {t('generate_step')}")
+        st.text_area(t("transcript_editor"), key="editor_transcript_text", height=360)
+        save_cols = st.columns([0.4, 0.6])
+        if save_cols[0].button(t("save_transcript"), use_container_width=True):
+            _save_transcript()
 
-        run_cols = st.columns([0.55, 0.45])
-        with run_cols[0]:
-            run = st.button(t("run_analysis"), type="primary", use_container_width=True)
-        with run_cols[1]:
-            stream = st.toggle(t("stream_output"), value=True)
+        run_cols = st.columns([0.45, 0.55])
+        run = run_cols[0].button(t("run_analysis"), type="primary", use_container_width=True)
+        stream = run_cols[1].toggle(t("stream_output"), value=True)
 
         if run:
-            st.session_state.report_text = ""
-            st.session_state.recommendation_text = ""
+            transcript_text = str(st.session_state.get("editor_transcript_text") or "").strip()
+            if not transcript_text:
+                st.error(t("missing_transcript"))
+                return
+            if _is_cloud_host(OLLAMA_HOST) and not OLLAMA_API_KEY:
+                st.error(t("missing_key"))
+                return
 
-            if _is_cloud_host(host) and not api_key:
-                st.error(t("err_missing_key"))
-            elif not st.session_state.transcript_text.strip():
-                st.error(t("err_missing_transcript"))
-            else:
-                if models and st.session_state.saved_model not in models:
-                    st.error(t("err_saved_model_unavailable"))
-                else:
-                    transcript_text = st.session_state.transcript_text.strip()
-                    user_prompt = (
-                        f"{t('user_prompt_intro')}\n\n"
-                        f"{t('user_prompt_transcript')}\n"
-                        f"{transcript_text}\n"
-                    )
+            saved_model = get_active_model(DEFAULT_MODEL_FROM_CONFIG)
+            models: List[str] = []
+            try:
+                models = _get_models_cached(OLLAMA_HOST, OLLAMA_API_KEY) if (OLLAMA_API_KEY or not _is_cloud_host(OLLAMA_HOST)) else []
+            except Exception:
+                models = []
+            if models and saved_model not in models:
+                st.error(t("saved_model_unavailable"))
+                return
 
-                    report_messages = [
-                        {"role": "system", "content": st.session_state.system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ]
+            current_prompt = get_system_prompt(DEFAULT_SYSTEM_PROMPT)
+            update_analysis(
+                int(record["id"]),
+                title=str(st.session_state.get("editor_title") or record.get("title") or "Untitled transcript"),
+                transcript_text=transcript_text,
+                meta=st.session_state.get("editor_meta") or {},
+                model_snapshot=saved_model,
+                system_prompt_snapshot=current_prompt,
+            )
 
-                    report_out = st.empty()
-                    report_acc = ""
+            with right:
+                report_placeholder = st.empty()
+                rec_placeholder = st.empty()
+            report_acc = ""
+            recommendation_acc = ""
+            user_prompt = f"{t('user_prompt_intro')}\n\n{t('user_prompt_transcript')}\n{transcript_text}\n"
+            report_messages = [
+                {"role": "system", "content": current_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
 
-                    try:
-                        with st.spinner(t("generating_report")):
-                            if stream:
-                                for chunk in chat_stream(
-                                    host=host,
-                                    api_key=api_key,
-                                    model=st.session_state.saved_model,
-                                    messages=report_messages,
-                                    temperature=DEFAULT_TEMPERATURE,
-                                ):
-                                    report_acc += chunk
-                                    report_out.text(report_acc)
-                            else:
-                                report_acc = chat_once(
-                                    host=host,
-                                    api_key=api_key,
-                                    model=st.session_state.saved_model,
-                                    messages=report_messages,
-                                    temperature=DEFAULT_TEMPERATURE,
-                                )
-                                report_out.text(report_acc)
-
-                        st.session_state.report_text = report_acc
-
-                        recommendation_prompt = build_recommendation_user_prompt(
-                            transcript_text=transcript_text,
-                            report_text=report_acc,
+            try:
+                with st.spinner(t("generating_report")):
+                    if stream:
+                        for chunk in chat_stream(
+                            host=OLLAMA_HOST,
+                            api_key=OLLAMA_API_KEY or None,
+                            model=saved_model,
+                            messages=report_messages,
+                            temperature=DEFAULT_TEMPERATURE,
+                        ):
+                            report_acc += chunk
+                            report_placeholder.text(report_acc)
+                    else:
+                        report_acc = chat_once(
+                            host=OLLAMA_HOST,
+                            api_key=OLLAMA_API_KEY or None,
+                            model=saved_model,
+                            messages=report_messages,
+                            temperature=DEFAULT_TEMPERATURE,
                         )
-                        recommendation_messages = [
-                            {"role": "system", "content": st.session_state.system_prompt},
-                            {"role": "user", "content": recommendation_prompt},
-                        ]
+                update_analysis(
+                    int(record["id"]),
+                    report_text=report_acc,
+                    model_snapshot=saved_model,
+                    system_prompt_snapshot=current_prompt,
+                )
 
-                        recommendation_out = st.empty()
-                        recommendation_acc = ""
+                recommendation_prompt = build_recommendation_user_prompt(
+                    transcript_text=transcript_text,
+                    report_text=report_acc,
+                )
+                recommendation_messages = [
+                    {"role": "system", "content": current_prompt},
+                    {"role": "user", "content": recommendation_prompt},
+                ]
 
-                        with st.spinner(t("generating_recommendation")):
-                            if stream:
-                                for chunk in chat_stream(
-                                    host=host,
-                                    api_key=api_key,
-                                    model=st.session_state.saved_model,
-                                    messages=recommendation_messages,
-                                    temperature=DEFAULT_TEMPERATURE,
-                                ):
-                                    recommendation_acc += chunk
-                                    recommendation_out.text(recommendation_acc)
-                            else:
-                                recommendation_acc = chat_once(
-                                    host=host,
-                                    api_key=api_key,
-                                    model=st.session_state.saved_model,
-                                    messages=recommendation_messages,
-                                    temperature=DEFAULT_TEMPERATURE,
-                                )
-                                recommendation_out.text(recommendation_acc)
-
-                        st.session_state.recommendation_text = recommendation_acc
-
-                    except OllamaError as e:
-                        st.error(str(e))
+                with st.spinner(t("generating_recommendation")):
+                    if stream:
+                        for chunk in chat_stream(
+                            host=OLLAMA_HOST,
+                            api_key=OLLAMA_API_KEY or None,
+                            model=saved_model,
+                            messages=recommendation_messages,
+                            temperature=DEFAULT_TEMPERATURE,
+                        ):
+                            recommendation_acc += chunk
+                            report_placeholder.text(report_acc)
+                            rec_placeholder.text(recommendation_acc)
+                    else:
+                        recommendation_acc = chat_once(
+                            host=OLLAMA_HOST,
+                            api_key=OLLAMA_API_KEY or None,
+                            model=saved_model,
+                            messages=recommendation_messages,
+                            temperature=DEFAULT_TEMPERATURE,
+                        )
+                update_analysis(
+                    int(record["id"]),
+                    recommendation_text=recommendation_acc,
+                    model_snapshot=saved_model,
+                    system_prompt_snapshot=current_prompt,
+                )
+                _load_analysis_into_state(int(record["id"]))
+                st.rerun()
+            except OllamaError as e:
+                st.error(str(e))
 
     with right:
-        st.markdown(f"### {t('output')}")
+        record = _current_record()
+        st.subheader(t("output"))
+        if not record:
+            st.info(t("no_output"))
+            return
 
-        if st.session_state.report_text.strip() or st.session_state.recommendation_text.strip():
-            st.text_area(
-                t("report_plain"),
-                value=st.session_state.report_text,
-                height=280,
-            )
+        st.markdown(f"**{t('current_record')}**")
+        st.caption(f"{t('filename')}: {record.get('source_filename') or '—'}")
+        st.caption(f"{t('id')}: {record.get('analysis_uid')}")
+        st.caption(f"{t('created')}: {_fmt_ts(record.get('created_at'))}")
+        st.caption(f"{t('updated')}: {_fmt_ts(record.get('updated_at'))}")
 
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            report_docx_bytes = report_text_to_docx_bytes(st.session_state.report_text)
+        report_text = str(record.get("report_text") or "")
+        recommendation_text = str(record.get("recommendation_text") or "")
+        if not report_text and not recommendation_text:
+            st.info(t("no_output"))
+            return
 
-            st.download_button(
-                t("download_report"),
-                data=report_docx_bytes,
-                file_name=f"paalss_report_{ts}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True,
-            )
+        st.text_area(t("report"), value=report_text, height=280)
+        report_docx = report_text_to_docx_bytes(report_text, title=t("report"))
+        st.download_button(
+            t("download_report"),
+            data=report_docx,
+            file_name=f"paalss_report_{record.get('analysis_uid')}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True,
+        )
 
-            st.text_area(
-                t("recommendation_plain"),
-                value=st.session_state.recommendation_text,
-                height=280,
-            )
+        st.text_area(t("recommendations"), value=recommendation_text, height=280)
+        recommendation_docx = report_text_to_docx_bytes(recommendation_text, title=t("recommendations"))
+        st.download_button(
+            t("download_recommendations"),
+            data=recommendation_docx,
+            file_name=f"paalss_recommendations_{record.get('analysis_uid')}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True,
+        )
 
-            recommendation_docx_bytes = report_text_to_docx_bytes(st.session_state.recommendation_text)
 
-            st.download_button(
-                t("download_recommendation"),
-                data=recommendation_docx_bytes,
-                file_name=f"paalss_recommendations_{ts}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True,
-            )
-        else:
-            st.info(t("info_run"))
+# ---------------- app ----------------
 
-        with st.expander(t("how_it_works")):
-            st.markdown(t("how_body"))
+
+def main() -> None:
+    try:
+        models = _get_models_cached(OLLAMA_HOST, OLLAMA_API_KEY) if (OLLAMA_API_KEY or not _is_cloud_host(OLLAMA_HOST)) else []
+    except Exception:
+        models = []
+
+    if "user_id" not in st.session_state:
+        _render_login()
+        return
+
+    _render_sidebar(models)
+    if st.session_state.get("role") == "admin" and st.session_state.get("page") == "admin":
+        _render_admin_page(models)
+    else:
+        _render_analyzer_page()
+
+
+if __name__ == "__main__":
+    main()
