@@ -57,6 +57,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "role_admin": "admin",
         "role_user": "user",
         "logout": "Logout",
+        "navigation": "Navigation",
         "new_analysis": "Start new analysis",
         "previous_analyses": "Previous analyses",
         "no_previous_analyses": "No saved analyses yet.",
@@ -138,6 +139,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "role_admin": "admin",
         "role_user": "usuario",
         "logout": "Cerrar sesión",
+        "navigation": "Navegación",
         "new_analysis": "Iniciar nuevo análisis",
         "previous_analyses": "Análisis anteriores",
         "no_previous_analyses": "Aún no hay análisis guardados.",
@@ -306,6 +308,15 @@ if not cookies.ready():
 st.session_state.setdefault("lang", _normalize_lang(cookies.get(LANGUAGE_COOKIE_KEY) or "en"))
 st.set_page_config(page_title=_app_title(), page_icon="🧾", layout="wide")
 
+_COOKIE_SAVE_DONE = False
+
+
+def _save_cookies_once() -> None:
+    global _COOKIE_SAVE_DONE
+    if not _COOKIE_SAVE_DONE:
+        cookies.save()
+        _COOKIE_SAVE_DONE = True
+
 
 @st.cache_resource
 def _ensure_db() -> tuple[bool, str]:
@@ -329,11 +340,12 @@ if not _db_ready:
     st.stop()
 
 
-def _persist_language(lang: str) -> None:
+def _persist_language(lang: str, save_cookie: bool = True) -> None:
     chosen = _normalize_lang(lang)
     st.session_state["lang"] = chosen
     cookies[LANGUAGE_COOKIE_KEY] = chosen
-    cookies.save()
+    if save_cookie:
+        _save_cookies_once()
     if st.session_state.get("user_id"):
         try:
             set_user_language(str(st.session_state["user_id"]), chosen)
@@ -344,11 +356,11 @@ def _persist_language(lang: str) -> None:
 def _login(user_id: str, role: str, language: Optional[str] = None) -> None:
     token = create_session(user_id, role)
     cookies[COOKIE_KEY] = token
-    cookies.save()
     st.session_state["user_id"] = user_id
     st.session_state["role"] = role
     st.session_state["session_token"] = token
-    _persist_language(language or get_user_language(user_id, st.session_state.get("lang", "en")))
+    _persist_language(language or get_user_language(user_id, st.session_state.get("lang", "en")), save_cookie=False)
+    _save_cookies_once()
 
 
 def _logout() -> None:
@@ -359,7 +371,7 @@ def _logout() -> None:
         except Exception:
             pass
     cookies[COOKIE_KEY] = ""
-    cookies.save()
+    _save_cookies_once()
     for key in [
         "user_id",
         "role",
@@ -556,7 +568,6 @@ def _render_language_checkboxes(prefix: str) -> None:
 
 def _render_login() -> None:
     st.title(_app_title())
-    _render_language_checkboxes("login")
     if not any_admin_exists():
         st.subheader(t("bootstrap_title"))
         st.caption(t("bootstrap_caption"))
@@ -599,7 +610,7 @@ def _render_sidebar(models: List[str]) -> None:
 
         if st.session_state.get("role") == "admin":
             st.radio(
-                "",
+                t("navigation"),
                 options=["analyzer", "admin"],
                 format_func=lambda x: t("analyzer") if x == "analyzer" else t("admin"),
                 key="page",
