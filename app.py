@@ -44,7 +44,7 @@ from lib.transcript_parser import (
 )
 
 APP_TITLES = {"en": "PAALSS Transcript Analyzer", "es": "Analizador de Transcripciones PAALSS"}
-PREFERRED_DEFAULT_MODEL = "qwen3.5:cloud"
+PREFERRED_DEFAULT_MODEL = "qwen3-vl:235b-cloud"
 DEFAULT_TEMPERATURE = 0.2
 COOKIE_KEY = "paalss_session_token"
 LANGUAGE_COOKIE_KEY = "paalss_lang"
