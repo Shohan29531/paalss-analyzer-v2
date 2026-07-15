@@ -884,7 +884,7 @@ def _render_analyzer_page() -> None:
                     model_snapshot=saved_model,
                     system_prompt_snapshot=current_prompt,
                 )
-                _load_analysis_into_state(int(record["id"]))
+                st.session_state["active_analysis_id"] = int(record["id"])
                 st.rerun()
             except OllamaError as e:
                 st.error(str(e))
