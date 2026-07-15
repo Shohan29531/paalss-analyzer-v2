@@ -21,6 +21,18 @@ class TranscriptData:
 
 _RE_DATE = re.compile(r"(\d{1,2})\s*/\s*(\d{1,2})\s*/\s*(\d{2,4})")
 
+_RE_PARTICIPANT_NAME = re.compile(
+    r"^(?:"
+    r"nombre\s+(?:del|de la)\s+"
+    r"(?:aprendiz|participante|estudiante|cliente|niñ[oa])"
+    r"|"
+    r"(?:learner|participant|student|client|child)\s+name"
+    r"|"
+    r"name\s+of\s+(?:learner|participant|student|client|child)"
+    r")\s*:?\s*(.+?)\s*$",
+    re.IGNORECASE,
+)
+
 
 def _normalize_text_for_model(text: str) -> str:
     """A pragmatic normalization: keep content, remove formatting artifacts."""
@@ -57,8 +69,14 @@ def _extract_meta_from_paragraphs(paragraphs: List[str]) -> Dict[str, str]:
         if not p_clean:
             continue
 
-        if "Nombre del aprendiz" in p_clean:
-            meta["learner_name"] = p_clean.split(":", 1)[-1].strip()
+        name_match = _RE_PARTICIPANT_NAME.match(p_clean)
+
+        if name_match:
+            participant_name = re.sub(r"\s+", " ", name_match.group(1)).strip()
+
+            if participant_name:
+                meta["learner_name"] = participant_name
+
         elif p_clean.lower().startswith("fecha"):
             meta["date_raw"] = p_clean.split(":", 1)[-1].strip()
             m = _RE_DATE.search(meta["date_raw"])

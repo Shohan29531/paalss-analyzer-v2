@@ -5,6 +5,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 from streamlit_cookies_manager_ext import EncryptedCookieManager
@@ -284,82 +285,38 @@ def _title_from_first_line(text: str, max_chars: int = 72) -> str:
     return line if len(line) <= max_chars else line[: max_chars - 1].rstrip() + "…"
 
 
-def _derive_title(filename: str, transcript_text: str, meta: Dict[str, Any]) -> str:
-    learner = str(meta.get("learner_name") or "").strip()
-    date = str(meta.get("date_iso") or meta.get("date_raw") or "").strip()
-    first_line = _title_from_first_line(transcript_text)
-    if learner and date:
-        return f"{learner} — {date}"
-    if learner:
-        return learner
-    if first_line and first_line != t("untitled_transcript"):
-        return first_line
-    stem = Path(filename or "transcript").stem.strip()
-    return stem or t("untitled_transcript")
+def _derive_title(
+    filename: str,
+    transcript_text: str,
+    meta: Dict[str, Any],
+) -> str:
+    participant_name = str(meta.get("learner_name") or "").strip()
+    participant_name = re.sub(r"\s+", " ", participant_name)
 
+    unavailable_names = {
+        "",
+        "n/a",
+        "na",
+        "none",
+        "unknown",
+        "not available",
+        "no disponible",
+    }
 
-def _generate_chat_title(transcript_text: str, lang: str) -> str:
-    language_name = "Spanish" if lang == "es" else "English"
-    fallback = "Muestra de lenguaje" if lang == "es" else "Language Sample"
+    if participant_name.casefold() in unavailable_names:
+        participant_name = "Unnamed Participant"
 
-    if _is_cloud_host(OLLAMA_HOST) and not OLLAMA_API_KEY:
-        return fallback
+    app_timezone = os.getenv("APP_TIMEZONE", "America/New_York")
+    created_date = datetime.now(ZoneInfo(app_timezone))
 
-    model = get_active_model(DEFAULT_MODEL_FROM_CONFIG)
+    formatted_date = (
+        f"{created_date.day} "
+        f"{created_date.strftime('%B')}, "
+        f"{created_date.year}"
+    )
 
-    title_prompt = f"""
-Create a short, meaningful sidebar title for this speech-language transcript.
+    return f"[{formatted_date}] - {participant_name} Script Analysis"
 
-Requirements:
-- Write the title in {language_name}.
-- Use 3 to 7 words.
-- Describe the main communication activity, topic, or skill.
-- Do not include the learner's name.
-- Do not include a date or timestamp.
-- Do not use the words Analysis, Transcript, Session, Análisis, Transcripción, or Sesión.
-- Do not use quotation marks.
-- Do not add an explanation.
-- Return only the title.
-
-Transcript:
-{transcript_text[:6000]}
-""".strip()
-
-    try:
-        generated = chat_once(
-            host=OLLAMA_HOST,
-            api_key=OLLAMA_API_KEY or None,
-            model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You create concise, meaningful titles. "
-                        "Return only the requested title."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": title_prompt,
-                },
-            ],
-            temperature=0.1,
-            timeout_s=45,
-        )
-
-        title = str(generated or "").strip()
-        title = title.splitlines()[0].strip()
-        title = title.strip("`\"' ")
-        title = re.sub(r"^(title|título)\s*:\s*", "", title, flags=re.IGNORECASE)
-        title = re.sub(r"\s+", " ", title)
-
-        if not title:
-            return fallback
-
-        return title[:72].rstrip()
-
-    except OllamaError:
-        return fallback
 
 
 # ---------------- cookies / auth ----------------
@@ -575,7 +532,7 @@ def _create_analysis_from_upload(uploaded: Any) -> None:
     transcript_text = build_numbered_transcript_block(parsed.utterances)
     meta = parsed.meta or {}
     current_lang = _normalize_lang(st.session_state.get("lang", "en"))
-    title = _generate_chat_title(transcript_text, current_lang)
+    title = _derive_title(uploaded.name, transcript_text, meta)
     analysis_id = create_analysis(
         user_id=str(st.session_state["user_id"]),
         role=str(st.session_state["role"]),
@@ -704,8 +661,7 @@ def _render_sidebar(models: List[str]) -> None:
             for row in rows:
                 rid = int(row["id"])
                 label = str(row.get("title") or row.get("source_filename") or f"Analysis {rid}")
-                ts = _fmt_ts(row.get("created_at"))
-                text = f"{label}\n{ts}" if ts else label
+                text = label
                 st.markdown('<div class="paalss-thread-btn">', unsafe_allow_html=True)
                 if st.button(text, key=f"analysis_btn_{rid}", use_container_width=True):
                     _load_analysis_into_state(rid)
