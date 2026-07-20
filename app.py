@@ -3,9 +3,9 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from zoneinfo import ZoneInfo
 
 import streamlit as st
 from streamlit_cookies_manager_ext import EncryptedCookieManager
@@ -22,6 +22,7 @@ from lib.storage import (
     change_user_password,
     create_analysis,
     create_session,
+    delete_analysis_for_user,
     delete_session,
     get_active_model,
     get_analysis,
@@ -30,9 +31,8 @@ from lib.storage import (
     get_user_language,
     init_db,
     list_analyses_for_user,
-    delete_analysis_for_user,
-    rename_analysis_for_user,
     list_users,
+    rename_analysis_for_user,
     set_active_model,
     set_system_prompt,
     set_user_language,
@@ -64,6 +64,20 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "new_analysis": "Start new analysis",
         "previous_analyses": "Previous analyses",
         "no_previous_analyses": "No saved analyses yet.",
+        "open_chat": "Open",
+        "rename_chat": "Rename chat",
+        "delete_chat": "Delete chat",
+        "chat_title": "Chat title",
+        "title_required": "Enter a chat title.",
+        "save": "Save",
+        "cancel": "Cancel",
+        "chat_renamed": "Chat renamed.",
+        "rename_failed": "Could not rename this chat.",
+        "delete_chat_title": "Delete chat?",
+        "delete_chat_warning": "This will permanently delete the chat, transcript, report, and recommendations. This action cannot be undone.",
+        "confirm_delete": "Delete permanently",
+        "chat_deleted": "Chat deleted.",
+        "delete_failed": "Could not delete this chat.",
         "bootstrap_title": "Create the first admin account",
         "bootstrap_caption": "No admin exists yet. The first account created here becomes the admin.",
         "username": "Username",
@@ -134,23 +148,6 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "untitled_transcript": "Untitled transcript",
         "db_init_failed": "Database initialization failed. Check DATABASE_URL / Supabase connection settings.",
         "db_init_help": "If you are using Supabase on Streamlit Cloud, use the Supavisor session pooler connection string, not the direct db.<project-ref>.supabase.co host.",
-        "open_chat": "Open",
-        "rename_chat": "Rename chat",
-        "delete_chat": "Delete chat",
-        "chat_title": "Chat title",
-        "title_required": "Enter a chat title.",
-        "save": "Save",
-        "cancel": "Cancel",
-        "chat_renamed": "Chat renamed.",
-        "rename_failed": "Could not rename this chat.",
-        "delete_chat_title": "Delete chat?",
-        "delete_chat_warning": (
-            "This will permanently delete the chat, transcript, report, "
-            "and recommendations. This action cannot be undone."
-        ),
-        "confirm_delete": "Delete permanently",
-        "chat_deleted": "Chat deleted.",
-        "delete_failed": "Could not delete this chat.",
     },
     "es": {
         "language": "Idioma",
@@ -163,6 +160,20 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "new_analysis": "Iniciar nuevo análisis",
         "previous_analyses": "Análisis anteriores",
         "no_previous_analyses": "Aún no hay análisis guardados.",
+        "open_chat": "Abrir",
+        "rename_chat": "Renombrar chat",
+        "delete_chat": "Eliminar chat",
+        "chat_title": "Título del chat",
+        "title_required": "Escribe un título para el chat.",
+        "save": "Guardar",
+        "cancel": "Cancelar",
+        "chat_renamed": "Chat renombrado.",
+        "rename_failed": "No se pudo renombrar este chat.",
+        "delete_chat_title": "¿Eliminar chat?",
+        "delete_chat_warning": "Esto eliminará permanentemente el chat, la transcripción, el informe y las recomendaciones. Esta acción no se puede deshacer.",
+        "confirm_delete": "Eliminar permanentemente",
+        "chat_deleted": "Chat eliminado.",
+        "delete_failed": "No se pudo eliminar este chat.",
         "bootstrap_title": "Crear la primera cuenta de administrador",
         "bootstrap_caption": "Todavía no existe un administrador. La primera cuenta creada aquí será admin.",
         "username": "Usuario",
@@ -233,23 +244,6 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "untitled_transcript": "Transcripción sin título",
         "db_init_failed": "La inicialización de la base de datos falló. Revisa DATABASE_URL y la configuración de conexión de Supabase.",
         "db_init_help": "Si usas Supabase en Streamlit Cloud, utiliza la cadena de conexión de Supavisor en modo session pooler, no el host directo db.<project-ref>.supabase.co.",
-        "open_chat": "Abrir",
-        "rename_chat": "Renombrar chat",
-        "delete_chat": "Eliminar chat",
-        "chat_title": "Título del chat",
-        "title_required": "Escribe un título para el chat.",
-        "save": "Guardar",
-        "cancel": "Cancelar",
-        "chat_renamed": "Chat renombrado.",
-        "rename_failed": "No se pudo renombrar este chat.",
-        "delete_chat_title": "¿Eliminar chat?",
-        "delete_chat_warning": (
-            "Esto eliminará permanentemente el chat, la transcripción, "
-            "el informe y las recomendaciones. Esta acción no se puede deshacer."
-        ),
-        "confirm_delete": "Eliminar permanentemente",
-        "chat_deleted": "Chat eliminado.",
-        "delete_failed": "No se pudo eliminar este chat.",
     },
 }
 
@@ -321,15 +315,43 @@ def _title_from_first_line(text: str, max_chars: int = 72) -> str:
     return line if len(line) <= max_chars else line[: max_chars - 1].rstrip() + "…"
 
 
-def _derive_title(
-    filename: str,
-    transcript_text: str,
-    meta: Dict[str, Any],
-) -> str:
-    participant_name = str(meta.get("learner_name") or "").strip()
-    participant_name = re.sub(r"\s+", " ", participant_name)
+_MONTH_NAMES = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
 
-    unavailable_names = {
+
+def _format_date(dt: datetime) -> str:
+    return f"{dt.day} {_MONTH_NAMES[dt.month - 1]}, {dt.year}"
+
+
+def _clean_participant_name(value: Any) -> str:
+    name = re.sub(r"\s+", " ", str(value or "")).strip()
+
+    # Some source documents place several metadata fields in one paragraph.
+    # Keep only the participant name and stop at the next known field label.
+    name = re.split(
+        r"\b(?:"
+        r"actividades?\s+de\s+elicitaci[oó]n"
+        r"|elicitation\s+activities?"
+        r"|fecha|date|sesi[oó]n|session|muestra|sample"
+        r")\s*:",
+        name,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0].strip(" -–—:;,.")
+
+    unavailable = {
         "",
         "n/a",
         "na",
@@ -338,21 +360,21 @@ def _derive_title(
         "not available",
         "no disponible",
     }
+    return "Unnamed Participant" if name.casefold() in unavailable else name
 
-    if participant_name.casefold() in unavailable_names:
-        participant_name = "Unnamed Participant"
 
-    app_timezone = os.getenv("APP_TIMEZONE", "America/New_York")
-    created_date = datetime.now(ZoneInfo(app_timezone))
+def _derive_title(filename: str, transcript_text: str, meta: Dict[str, Any]) -> str:
+    del filename, transcript_text  # Titles are intentionally metadata-based.
 
-    formatted_date = (
-        f"{created_date.day} "
-        f"{created_date.strftime('%B')}, "
-        f"{created_date.year}"
-    )
+    participant_name = _clean_participant_name(meta.get("learner_name"))
+    timezone_name = os.getenv("APP_TIMEZONE", "America/New_York")
 
-    return f"[{formatted_date}] - {participant_name} Script Analysis"
+    try:
+        created_at = datetime.now(ZoneInfo(timezone_name))
+    except Exception:
+        created_at = datetime.now()
 
+    return f"[{_format_date(created_at)}] - {participant_name} Script Analysis"
 
 
 # ---------------- cookies / auth ----------------
@@ -458,43 +480,6 @@ if "user_id" not in st.session_state:
 # ---------------- state helpers ----------------
 
 
-st.markdown(
-    """
-    <style>
-    section[data-testid="stSidebar"]
-    [data-testid="stPopover"] button {
-        width: 2.5rem !important;
-        min-width: 2.5rem !important;
-        height: 2.5rem !important;
-        min-height: 2.5rem !important;
-        padding: 0 !important;
-        border: none !important;
-        background: transparent !important;
-        box-shadow: none !important;
-        border-radius: 0.5rem !important;
-    }
-
-    section[data-testid="stSidebar"]
-    [data-testid="stPopover"] button:hover {
-        background: rgba(128, 128, 128, 0.12) !important;
-    }
-
-    section[data-testid="stSidebar"]
-    [data-testid="stPopover"] button svg {
-        display: none !important;
-    }
-
-    section[data-testid="stSidebar"]
-    [data-testid="stPopover"] button p {
-        margin: 0 !important;
-        padding: 0 !important;
-        font-size: 1.45rem !important;
-        line-height: 1 !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
 
 st.markdown(
     """
@@ -502,19 +487,48 @@ st.markdown(
   section[data-testid="stSidebar"] > div:first-child {
     padding-top: 0.6rem;
   }
+
   div.block-container {
     max-width: 100% !important;
     padding-left: 1.2rem;
     padding-right: 1.2rem;
     padding-top: 1rem !important;
   }
-  .paalss-thread-btn button {
-    text-align: left !important;
-    justify-content: flex-start !important;
+
+  /* Let long chat titles wrap naturally inside their button. */
+  section[data-testid="stSidebar"]
+  div[data-testid="stHorizontalBlock"] > div:first-child button {
     white-space: normal !important;
     height: auto !important;
+    min-height: 2.75rem !important;
     padding-top: 0.55rem !important;
     padding-bottom: 0.55rem !important;
+  }
+
+  /* Compact three-dot trigger. The popover content is rendered elsewhere,
+     so these selectors affect only the sidebar trigger. */
+  section[data-testid="stSidebar"] div[data-testid="stPopover"] button {
+    width: 2.75rem !important;
+    min-width: 2.75rem !important;
+    height: 2.75rem !important;
+    min-height: 2.75rem !important;
+    padding: 0 !important;
+    justify-content: center !important;
+  }
+
+  /* Hide Streamlit's dropdown chevron; keep only the three dots. */
+  section[data-testid="stSidebar"]
+  div[data-testid="stPopover"] button svg,
+  section[data-testid="stSidebar"]
+  div[data-testid="stPopover"] button [data-testid="stIconMaterial"] {
+    display: none !important;
+  }
+
+  section[data-testid="stSidebar"]
+  div[data-testid="stPopover"] button p {
+    margin: 0 !important;
+    font-size: 1.35rem !important;
+    line-height: 1 !important;
   }
 </style>
 """,
@@ -530,10 +544,9 @@ def _fmt_ts(value: Any) -> str:
     s = str(value or "")
     if not s:
         return ""
-
     try:
         dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-        return f"{dt.day} {dt.strftime('%B')}, {dt.year}"
+        return _format_date(dt)
     except Exception:
         return s
 
@@ -558,99 +571,98 @@ def _clear_analysis_state() -> None:
         st.session_state.pop(key, None)
 
 
-@st.dialog(t("rename_chat"))
-def _rename_chat_dialog(
-    analysis_id: int,
-    current_title: str,
-) -> None:
-    with st.form(f"rename_chat_form_{analysis_id}"):
-        new_title = st.text_input(
-            t("chat_title"),
-            value=current_title,
-            key=f"rename_chat_input_{analysis_id}",
-        )
+def _apply_pending_analysis_state() -> None:
+    # Dialog widgets rerun independently. Apply changes here, before the main
+    # editor widgets are instantiated, to avoid Session State widget errors.
+    pending_title = st.session_state.pop("_pending_editor_title", None)
+    if pending_title is not None:
+        st.session_state["editor_title"] = str(pending_title)
 
-        submitted = st.form_submit_button(
-            t("save"),
-            type="primary",
-            use_container_width=True,
-        )
+    if st.session_state.pop("_pending_clear_analysis_state", False):
+        _clear_analysis_state()
+        st.session_state["suppress_autoload"] = False
 
-    if not submitted:
-        return
 
-    clean_title = new_title.strip()
+_dialog = getattr(st, "dialog", None) or getattr(st, "experimental_dialog")
 
-    if not clean_title:
-        st.error(t("title_required"))
-        return
 
-    renamed = rename_analysis_for_user(
-        analysis_id=int(analysis_id),
-        user_id=str(st.session_state["user_id"]),
-        title=clean_title,
+@_dialog(t("rename_chat"))
+def _rename_chat_dialog(analysis_id: int, current_title: str) -> None:
+    new_title = st.text_input(
+        t("chat_title"),
+        value=current_title,
+        key=f"rename_chat_input_{analysis_id}",
     )
 
-    if not renamed:
-        st.error(t("rename_failed"))
-        return
+    save_col, cancel_col = st.columns(2)
 
-    # Keep the currently opened title editor synchronized.
-    if int(st.session_state.get("active_analysis_id") or 0) == int(analysis_id):
-        st.session_state["editor_title"] = clean_title
+    if save_col.button(
+        t("save"),
+        type="primary",
+        use_container_width=True,
+        key=f"save_rename_{analysis_id}",
+    ):
+        clean_title = new_title.strip()
+        if not clean_title:
+            st.error(t("title_required"))
+            return
 
-    _notify_success(t("chat_renamed"))
-    st.rerun()
+        renamed = rename_analysis_for_user(
+            analysis_id=int(analysis_id),
+            user_id=str(st.session_state["user_id"]),
+            title=clean_title,
+        )
+        if not renamed:
+            st.error(t("rename_failed"))
+            return
+
+        if int(st.session_state.get("active_analysis_id") or 0) == int(analysis_id):
+            st.session_state["_pending_editor_title"] = clean_title
+
+        _notify_success(t("chat_renamed"))
+        st.rerun()
+
+    if cancel_col.button(
+        t("cancel"),
+        use_container_width=True,
+        key=f"cancel_rename_{analysis_id}",
+    ):
+        st.rerun()
 
 
-@st.dialog(t("delete_chat_title"))
-def _delete_chat_dialog(
-    analysis_id: int,
-    current_title: str,
-) -> None:
+@_dialog(t("delete_chat_title"))
+def _delete_chat_dialog(analysis_id: int, current_title: str) -> None:
     st.markdown(f"**{current_title}**")
     st.warning(t("delete_chat_warning"))
 
     delete_col, cancel_col = st.columns(2)
 
-    with delete_col:
-        confirmed = st.button(
-            t("confirm_delete"),
-            type="primary",
-            use_container_width=True,
-            key=f"confirm_delete_{analysis_id}",
+    if delete_col.button(
+        t("confirm_delete"),
+        type="primary",
+        use_container_width=True,
+        key=f"confirm_delete_{analysis_id}",
+    ):
+        deleted = delete_analysis_for_user(
+            analysis_id=int(analysis_id),
+            user_id=str(st.session_state["user_id"]),
         )
+        if not deleted:
+            st.error(t("delete_failed"))
+            return
 
-    with cancel_col:
-        cancelled = st.button(
-            t("cancel"),
-            use_container_width=True,
-            key=f"cancel_delete_{analysis_id}",
-        )
+        if int(st.session_state.get("active_analysis_id") or 0) == int(analysis_id):
+            st.session_state["_pending_clear_analysis_state"] = True
 
-    if cancelled:
+        _notify_success(t("chat_deleted"))
         st.rerun()
 
-    if not confirmed:
-        return
-
-    deleted = delete_analysis_for_user(
-        analysis_id=int(analysis_id),
-        user_id=str(st.session_state["user_id"]),
-    )
-
-    if not deleted:
-        st.error(t("delete_failed"))
-        return
-
-    # Clear the editor only when the deleted chat was currently open.
-    if int(st.session_state.get("active_analysis_id") or 0) == int(analysis_id):
-        _clear_analysis_state()
-        st.session_state["suppress_autoload"] = False
-
-    _notify_success(t("chat_deleted"))
-    st.rerun()
-
+    if cancel_col.button(
+        t("cancel"),
+        use_container_width=True,
+        key=f"cancel_delete_{analysis_id}",
+    ):
+        st.rerun()
 
 
 def _record_accessible(record: Optional[Dict[str, Any]]) -> bool:
@@ -712,7 +724,6 @@ def _create_analysis_from_upload(uploaded: Any) -> None:
         parsed = parse_transcript_txt(uploaded.getvalue().decode("utf-8", errors="ignore"))
     transcript_text = build_numbered_transcript_block(parsed.utterances)
     meta = parsed.meta or {}
-    current_lang = _normalize_lang(st.session_state.get("lang", "en"))
     title = _derive_title(uploaded.name, transcript_text, meta)
     analysis_id = create_analysis(
         user_id=str(st.session_state["user_id"]),
@@ -802,8 +813,6 @@ def _render_login() -> None:
             st.rerun()
 
 
-
-
 def _render_sidebar(models: List[str]) -> None:
     with st.sidebar:
         st.markdown(f"## {_app_title()}")
@@ -843,7 +852,6 @@ def _render_sidebar(models: List[str]) -> None:
         if rows:
             for row in rows:
                 rid = int(row["id"])
-
                 label = str(
                     row.get("title")
                     or row.get("source_filename")
@@ -851,17 +859,12 @@ def _render_sidebar(models: List[str]) -> None:
                 )
 
                 title_col, menu_col = st.columns(
-                    [0.90, 0.10],
+                    [8.5, 1.5],
                     gap="small",
                     vertical_alignment="center",
                 )
 
                 with title_col:
-                    st.markdown(
-                        '<div class="paalss-thread-btn">',
-                        unsafe_allow_html=True,
-                    )
-
                     if st.button(
                         label,
                         key=f"analysis_btn_{rid}",
@@ -870,9 +873,8 @@ def _render_sidebar(models: List[str]) -> None:
                         _load_analysis_into_state(rid)
                         st.rerun()
 
-                    st.markdown("</div>", unsafe_allow_html=True)
-
-                with st.popover("⋯"):
+                with menu_col:
+                    with st.popover("⋯", use_container_width=True):
                         if st.button(
                             t("open_chat"),
                             key=f"open_chat_{rid}",
@@ -894,7 +896,6 @@ def _render_sidebar(models: List[str]) -> None:
                             use_container_width=True,
                         ):
                             _delete_chat_dialog(rid, label)
-
         else:
             st.caption(t("no_previous_analyses"))
 
@@ -1134,7 +1135,11 @@ def _render_analyzer_page() -> None:
                     model_snapshot=saved_model,
                     system_prompt_snapshot=current_prompt,
                 )
-                st.session_state["active_analysis_id"] = int(record["id"])
+                # The editor widgets have already been instantiated in this run.
+                # Reloading their keyed Session State values here raises a
+                # StreamlitAPIException. The generated output is already saved
+                # to the database, so rerun and let the next script execution
+                # read the updated record safely.
                 st.rerun()
             except OllamaError as e:
                 st.error(str(e))
@@ -1183,6 +1188,8 @@ def _render_analyzer_page() -> None:
 
 
 def main() -> None:
+    _apply_pending_analysis_state()
+
     try:
         models = _get_models_cached(OLLAMA_HOST, OLLAMA_API_KEY) if (OLLAMA_API_KEY or not _is_cloud_host(OLLAMA_HOST)) else []
     except Exception:
