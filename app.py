@@ -82,6 +82,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "unnamed_aac_user": "Unnamed AAC User",
         "no_matching_analyses": "No chats match these filters.",
         "export_sheet": "Export as Sheet",
+        "export_all_chats": "Export All Chats as Sheet",
         "rename_chat": "Rename chat",
         "delete_chat": "Delete chat",
         "chat_title": "Chat title",
@@ -204,6 +205,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "unnamed_aac_user": "Usuario de CAA sin nombre",
         "no_matching_analyses": "Ningún chat coincide con estos filtros.",
         "export_sheet": "Exportar como hoja",
+        "export_all_chats": "Exportar todos los chats como hoja",
         "rename_chat": "Renombrar chat",
         "delete_chat": "Eliminar chat",
         "chat_title": "Título del chat",
@@ -1062,14 +1064,16 @@ def _xlsx_inline_cell(cell_ref: str, value: Any, style_id: int) -> str:
     )
 
 
-def _analysis_sheet_bytes(record: Dict[str, Any]) -> bytes:
+def _analyses_sheet_bytes(records: List[Dict[str, Any]]) -> bytes:
     headers = list(PAALSS_EXPORT_COLUMNS)
-    row_values = _analysis_export_row(record)
+    all_row_values = [_analysis_export_row(record) for record in records]
     last_column = _excel_column_name(len(headers))
+    last_row = len(all_row_values) + 1
 
     column_xml: List[str] = []
-    for index, (header, value) in enumerate(zip(headers, row_values), start=1):
-        longest = max(len(str(header)), len(str(value)))
+    for index, header in enumerate(headers, start=1):
+        column_values = [str(row[index - 1]) for row in all_row_values]
+        longest = max([len(str(header)), *[len(value) for value in column_values]])
         width = max(12.0, min(42.0, longest * 0.9 + 2.0))
         column_xml.append(
             f'<col min="{index}" max="{index}" width="{width:.1f}" customWidth="1"/>'
@@ -1079,10 +1083,20 @@ def _analysis_sheet_bytes(record: Dict[str, Any]) -> bytes:
         _xlsx_inline_cell(f"{_excel_column_name(index)}1", header, 1)
         for index, header in enumerate(headers, start=1)
     )
-    data_cells = "".join(
-        _xlsx_inline_cell(f"{_excel_column_name(index)}2", value, 2)
-        for index, value in enumerate(row_values, start=1)
-    )
+
+    data_rows: List[str] = []
+    for row_number, row_values in enumerate(all_row_values, start=2):
+        data_cells = "".join(
+            _xlsx_inline_cell(
+                f"{_excel_column_name(index)}{row_number}",
+                value,
+                2,
+            )
+            for index, value in enumerate(row_values, start=1)
+        )
+        data_rows.append(
+            f'<row r="{row_number}" ht="30" customHeight="1">{data_cells}</row>'
+        )
 
     sheet_xml = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
@@ -1091,9 +1105,9 @@ def _analysis_sheet_bytes(record: Dict[str, Any]) -> bytes:
   <cols>{''.join(column_xml)}</cols>
   <sheetData>
     <row r="1" ht="66" customHeight="1">{header_cells}</row>
-    <row r="2" ht="30" customHeight="1">{data_cells}</row>
+    {''.join(data_rows)}
   </sheetData>
-  <autoFilter ref="A1:{last_column}2"/>
+  <autoFilter ref="A1:{last_column}{last_row}"/>
 </worksheet>'''
 
     styles_xml = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -1175,6 +1189,14 @@ def _analysis_sheet_bytes(record: Dict[str, Any]) -> bytes:
         archive.writestr("docProps/core.xml", core_xml)
         archive.writestr("docProps/app.xml", app_xml)
     return output.getvalue()
+
+
+def _analysis_sheet_bytes(record: Dict[str, Any]) -> bytes:
+    return _analyses_sheet_bytes([record])
+
+
+def _all_chats_sheet_filename() -> str:
+    return f"PAALSS_all_chats_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
 
 
 def _sheet_filename(record: Dict[str, Any]) -> str:
@@ -1958,12 +1980,32 @@ def _render_search_tab() -> None:
         query=search_query,
         clinician_id=clinician_filter,
         patient_filter=patient_filter,
-        limit=200,
+        limit=2_147_483_647,
     )
 
     if not rows:
         st.info(t("no_matching_analyses"))
         return
+
+    full_records_by_id: Dict[int, Dict[str, Any]] = {}
+    full_records: List[Dict[str, Any]] = []
+    for row in rows:
+        rid = int(row["id"])
+        full_record = get_analysis(rid)
+        if full_record and _record_accessible(full_record):
+            full_records_by_id[rid] = full_record
+            full_records.append(full_record)
+
+    if full_records:
+        st.download_button(
+            t("export_all_chats"),
+            data=_analyses_sheet_bytes(full_records),
+            file_name=_all_chats_sheet_filename(),
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="search_export_all_chats_sheet",
+            use_container_width=True,
+            type="primary",
+        )
 
     st.caption(f"{len(rows)} result{'s' if len(rows) != 1 else ''}")
     for row in rows:
@@ -1988,8 +2030,8 @@ def _render_search_tab() -> None:
                 if row.get("source_filename"):
                     st.caption(f"{t('filename')}: {row.get('source_filename')}")
             with export_col:
-                full_record = get_analysis(rid)
-                if full_record and _record_accessible(full_record):
+                full_record = full_records_by_id.get(rid)
+                if full_record:
                     st.download_button(
                         t("export_sheet"),
                         data=_analysis_sheet_bytes(full_record),
