@@ -458,6 +458,43 @@ if "user_id" not in st.session_state:
 # ---------------- state helpers ----------------
 
 
+st.markdown(
+    """
+    <style>
+    section[data-testid="stSidebar"]
+    [data-testid="stPopover"] button {
+        width: 2.5rem !important;
+        min-width: 2.5rem !important;
+        height: 2.5rem !important;
+        min-height: 2.5rem !important;
+        padding: 0 !important;
+        border: none !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        border-radius: 0.5rem !important;
+    }
+
+    section[data-testid="stSidebar"]
+    [data-testid="stPopover"] button:hover {
+        background: rgba(128, 128, 128, 0.12) !important;
+    }
+
+    section[data-testid="stSidebar"]
+    [data-testid="stPopover"] button svg {
+        display: none !important;
+    }
+
+    section[data-testid="stSidebar"]
+    [data-testid="stPopover"] button p {
+        margin: 0 !important;
+        padding: 0 !important;
+        font-size: 1.45rem !important;
+        line-height: 1 !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 st.markdown(
     """
@@ -765,6 +802,8 @@ def _render_login() -> None:
             st.rerun()
 
 
+
+
 def _render_sidebar(models: List[str]) -> None:
     with st.sidebar:
         st.markdown(f"## {_app_title()}")
@@ -812,8 +851,9 @@ def _render_sidebar(models: List[str]) -> None:
                 )
 
                 title_col, menu_col = st.columns(
-                    [0.84, 0.16],
+                    [0.90, 0.10],
                     gap="small",
+                    vertical_alignment="center",
                 )
 
                 with title_col:
@@ -832,11 +872,7 @@ def _render_sidebar(models: List[str]) -> None:
 
                     st.markdown("</div>", unsafe_allow_html=True)
 
-                with menu_col:
-                    with st.popover(
-                        "⋯",
-                        use_container_width=True,
-                    ):
+                with st.popover("⋯"):
                         if st.button(
                             t("open_chat"),
                             key=f"open_chat_{rid}",
