@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import io
 import os
 import re
+import zipfile
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from xml.sax.saxutils import escape
 
 import streamlit as st
 from streamlit_cookies_manager_ext import EncryptedCookieManager
@@ -78,7 +81,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "aac_user_patient": "AAC User",
         "unnamed_aac_user": "Unnamed AAC User",
         "no_matching_analyses": "No chats match these filters.",
-        "open_chat": "Open",
+        "export_sheet": "Export as Sheet",
         "rename_chat": "Rename chat",
         "delete_chat": "Delete chat",
         "chat_title": "Chat title",
@@ -200,7 +203,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "aac_user_patient": "Usuario de CAA",
         "unnamed_aac_user": "Usuario de CAA sin nombre",
         "no_matching_analyses": "Ningún chat coincide con estos filtros.",
-        "open_chat": "Abrir",
+        "export_sheet": "Exportar como hoja",
         "rename_chat": "Renombrar chat",
         "delete_chat": "Eliminar chat",
         "chat_title": "Título del chat",
@@ -694,6 +697,495 @@ def _patient_display(patient_id: Any, known_patient_ids: Optional[set[str]] = No
     return clean_id
 
 
+
+PAALSS_EXPORT_COLUMNS: Tuple[str, ...] = (
+    "Clinician ID",
+    "AAC User ID",
+    "Transcript #",
+    "Gender",
+    "Age",
+    "Length",
+    "Elicitation Activity",
+    "Total Number of Utterances (ENUNCIADOS)",
+    "MLUw",
+    "Total Number of Words (TNW) (PALABRAS)",
+    "Total Number of Different Words (TNDW) (PALABRAS DIFERENTES)",
+    "Total Number of Different Nouns (SUSTANTIVOS)",
+    "Total Number of Nouns ",
+    "Total Number of Different Verbs        (VERBOS)",
+    "Total Number of Verbs ",
+    "Total Number of Different Pronouns and Determinants (PRONOMBRES Y DETERMINANTES)",
+    "Total Number of Different Adverbs (ADVERBIOS)",
+    "Total Number of Different Adjectives (ADJETIVOS)",
+    "Total Number of Different Substitutes (SUSTITUTOS)",
+    "Total Number of Different Articles (ARTÍCULOS)",
+    "Total Number of Different Numerals (NUMERALES)",
+    "Total Number of Different Prepositions (PREPOSICIONES)",
+    "Total Number of Different Interjections (INTERJECCIONES)",
+    "Total Number of Different Conjunctions (CONJUNCIONES)",
+    "Total Number of Different Morphological Structures MORFOLÓLOGICAS DIFERENTES",
+    "Total Number of Morphological Structures MORFOLÓGICAS",
+    "Grammatical Complexity Score COMPLEJIDAD GRAMATICAL",
+    "Total Number of Different Syntactic Structures ESTRUCTURAS SINÁCTICAS DIFERENTES",
+    "Total Number of Syntactic Structures ESTRUCTURAS SINTÁCTICAS",
+)
+
+_EXPORT_MISSING_VALUES = {
+    "", "na", "n/a", "none", "null", "unknown", "not provided",
+    "not available", "no proporcionado", "no disponible",
+}
+
+
+def _export_value(value: Any) -> str:
+    clean = re.sub(r"\s+", " ", str(value or "")).strip(" \t\r\n:;,-–—")
+    return "NA" if clean.casefold() in _EXPORT_MISSING_VALUES else clean
+
+
+def _report_lines(report_text: str) -> List[str]:
+    lines: List[str] = []
+    for raw_line in str(report_text or "").splitlines():
+        line = raw_line.strip()
+        line = re.sub(r"^\s*[-*•]+\s*", "", line)
+        line = line.replace("**", "").replace("__", "").replace("`", "")
+        if line:
+            lines.append(line)
+    return lines
+
+
+def _number_from_text(value: str) -> Optional[str]:
+    match = re.search(r"(?<![\w])(-?\d+(?:[.,]\d+)?)", str(value or ""))
+    if not match:
+        return None
+    number = match.group(1)
+    if "," in number and "." not in number:
+        left, right = number.split(",", 1)
+        number = f"{left}.{right}" if len(right) <= 2 else f"{left}{right}"
+    return number
+
+
+def _extract_report_number(report_text: str, labels: Tuple[str, ...]) -> str:
+    lines = _report_lines(report_text)
+    for label in labels:
+        label_pattern = re.escape(label).replace(r"\ ", r"\s+")
+        pattern = re.compile(
+            rf"^(?:\d+[.)]\s*)?{label_pattern}(?=\s|:|\(|-|=|$)(.*)$",
+            flags=re.IGNORECASE,
+        )
+        for line in lines:
+            matched = pattern.match(line)
+            if not matched:
+                continue
+            number = _number_from_text(matched.group(1).strip())
+            if number is not None:
+                return number
+    return "NA"
+
+
+def _sum_report_numbers(first: str, second: str) -> str:
+    if first == "NA" or second == "NA":
+        return "NA"
+    try:
+        total = float(first) + float(second)
+    except (TypeError, ValueError):
+        return "NA"
+    return str(int(total)) if total.is_integer() else str(total)
+
+
+def _first_meta_value(meta: Dict[str, Any], keys: Tuple[str, ...]) -> str:
+    normalized = {str(key).casefold(): value for key, value in (meta or {}).items()}
+    for key in keys:
+        clean = _export_value(normalized.get(key.casefold()))
+        if clean != "NA":
+            return clean
+    return "NA"
+
+
+def _sample_information_text(report_text: str) -> str:
+    text = str(report_text or "")
+    section_two = re.search(r"(?m)^\s*2\s*[.)]\s+", text)
+    return text[: section_two.start()] if section_two else text
+
+
+def _extract_report_text(report_text: str, labels: Tuple[str, ...]) -> str:
+    for label in labels:
+        label_pattern = re.escape(label).replace(r"\ ", r"\s+")
+        pattern = re.compile(
+            rf"^(?:\d+[.)]\s*)?{label_pattern}\s*[:=-]\s*(.+)$",
+            flags=re.IGNORECASE,
+        )
+        for line in _report_lines(report_text):
+            matched = pattern.match(line)
+            if matched:
+                clean = _export_value(matched.group(1))
+                if clean != "NA":
+                    return clean
+    return "NA"
+
+
+def _extract_labeled_text(sources: List[str], labels: Tuple[str, ...]) -> str:
+    all_labels = (
+        "Gender", "Sex", "Género", "Genero", "Sexo", "Age", "Edad",
+        "Length", "Duration", "Recording Length", "Recording Duration",
+        "Duración", "Duracion", "Duración de la grabación", "Duracion de la grabacion",
+        "Elicitation Activity", "Elicitation Activities", "Actividad de elicitación",
+        "Actividades de elicitación", "Actividad de elicitacion", "Actividades de elicitacion",
+        "Learner", "Aprendiz", "Date", "Fecha", "Session", "Sesión", "Sesion",
+        "Sample", "Muestra", "Interlocutor", "Nombre de la/el interlocutor",
+    )
+    next_label_pattern = "|".join(
+        re.escape(item).replace(r"\ ", r"\s+") for item in all_labels
+    )
+    for source in sources:
+        source_text = str(source or "")
+        for label in labels:
+            label_pattern = re.escape(label).replace(r"\ ", r"\s+")
+            pattern = re.compile(
+                rf"{label_pattern}\s*:\s*(.+?)(?=\s+(?:{next_label_pattern})\s*:|$)",
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            matched = pattern.search(source_text)
+            if matched:
+                clean = _export_value(matched.group(1))
+                if clean != "NA":
+                    return clean
+    return "NA"
+
+
+def _analysis_export_row(record: Dict[str, Any]) -> List[str]:
+    report_text = str(record.get("report_text") or "")
+    meta = record.get("meta") or {}
+    if not isinstance(meta, dict):
+        meta = {}
+
+    sample_info = _sample_information_text(report_text)
+    metadata_sources = [
+        str(value) for value in meta.values() if value is not None and str(value).strip()
+    ] + [sample_info]
+
+    gender = _first_meta_value(meta, ("gender", "sex", "género", "genero", "sexo"))
+    if gender == "NA":
+        gender = _extract_labeled_text(
+            metadata_sources, ("Gender", "Sex", "Género", "Genero", "Sexo")
+        )
+
+    age = _first_meta_value(meta, ("age", "edad"))
+    if age == "NA":
+        age = _extract_labeled_text(metadata_sources, ("Age", "Edad"))
+
+    length = _first_meta_value(
+        meta,
+        (
+            "length", "duration", "recording_length", "recording_duration",
+            "duración", "duracion", "duración_de_la_grabación",
+            "duracion_de_la_grabacion",
+        ),
+    )
+    if length == "NA":
+        length = _extract_labeled_text(
+            metadata_sources,
+            (
+                "Recording Length", "Recording Duration", "Duration", "Length",
+                "Duración de la grabación", "Duracion de la grabacion",
+                "Duración", "Duracion",
+            ),
+        )
+
+    elicitation = _first_meta_value(
+        meta,
+        (
+            "elicitation_activity", "elicitation_activities", "activity", "activities",
+            "actividad_de_elicitación", "actividades_de_elicitación",
+            "actividad_de_elicitacion", "actividades_de_elicitacion",
+        ),
+    )
+    if elicitation == "NA":
+        elicitation = _extract_labeled_text(
+            metadata_sources,
+            (
+                "Elicitation Activity", "Elicitation Activities",
+                "Actividad de elicitación", "Actividades de elicitación",
+                "Actividad de elicitacion", "Actividades de elicitacion",
+            ),
+        )
+
+    pronouns_and_determiners = _extract_report_number(
+        report_text,
+        (
+            "Pronouns + Determiners", "Pronouns and Determiners",
+            "Pronombres + Determinantes", "Pronombres y Determinantes",
+        ),
+    )
+    if pronouns_and_determiners == "NA":
+        pronouns_and_determiners = _sum_report_numbers(
+            _extract_report_number(report_text, ("Pronouns", "Pronombres")),
+            _extract_report_number(report_text, ("Determiners", "Determinantes")),
+        )
+
+    transcript_number = _first_meta_value(
+        meta,
+        ("transcript_number", "transcript_no", "transcript_id", "sample", "sample_id", "muestra"),
+    )
+    if transcript_number == "NA":
+        transcript_number = _extract_report_text(
+            sample_info,
+            ("Transcript #", "Transcript Number", "Sample ID", "Número de transcripción", "Muestra"),
+        )
+    if transcript_number == "NA":
+        transcript_number = _export_value(record.get("id"))
+
+    values = {
+        "Clinician ID": _export_value(record.get("user_id")),
+        "AAC User ID": _export_value(record.get("patient_id")),
+        "Transcript #": transcript_number,
+        "Gender": gender,
+        "Age": age,
+        "Length": length,
+        "Elicitation Activity": elicitation,
+        "Total Number of Utterances (ENUNCIADOS)": _extract_report_number(
+            report_text,
+            (
+                "Total Utterances (Enunciados)", "Total Number of Utterances",
+                "Number of Utterances", "Número total de enunciados", "Total de enunciados",
+            ),
+        ),
+        "MLUw": _extract_report_number(
+            report_text,
+            (
+                "MLUw (Rounded)", "MLUw", "Mean Length of Utterance in words",
+                "Mean Length of Utterance (MLU)",
+                "Longitud media del enunciado en palabras",
+                "Longitud media del enunciado",
+            ),
+        ),
+        "Total Number of Words (TNW) (PALABRAS)": _extract_report_number(
+            report_text,
+            ("Total Number of Words (TNW)", "TNW", "Número total de palabras (TNW)"),
+        ),
+        "Total Number of Different Words (TNDW) (PALABRAS DIFERENTES)": _extract_report_number(
+            report_text,
+            (
+                "Total Number of Different Words (TNDW)", "TNDW",
+                "Número total de palabras diferentes (TNDW)",
+            ),
+        ),
+        "Total Number of Different Nouns (SUSTANTIVOS)": _extract_report_number(
+            report_text,
+            ("Noun Types", "Different Nouns", "Nouns", "Tipos de sustantivos", "Sustantivos"),
+        ),
+        "Total Number of Nouns ": _extract_report_number(
+            report_text,
+            ("Noun Tokens", "Total Nouns", "Total Number of Nouns", "Tokens de sustantivos", "Total de sustantivos"),
+        ),
+        "Total Number of Different Verbs        (VERBOS)": _extract_report_number(
+            report_text,
+            ("Verb Types", "Different Verbs", "Tipos verbales", "Tipos de verbos"),
+        ),
+        "Total Number of Verbs ": _extract_report_number(
+            report_text,
+            ("Verb Tokens", "Total Verbs", "Total Number of Verbs", "Tokens verbales", "Total de verbos"),
+        ),
+        "Total Number of Different Pronouns and Determinants (PRONOMBRES Y DETERMINANTES)": pronouns_and_determiners,
+        "Total Number of Different Adverbs (ADVERBIOS)": _extract_report_number(report_text, ("Adverbs", "Adverbios")),
+        "Total Number of Different Adjectives (ADJETIVOS)": _extract_report_number(report_text, ("Adjectives", "Adjetivos")),
+        "Total Number of Different Substitutes (SUSTITUTOS)": _extract_report_number(report_text, ("Substitutes", "Sustitutos")),
+        "Total Number of Different Articles (ARTÍCULOS)": _extract_report_number(report_text, ("Articles", "Artículos", "Articulos")),
+        "Total Number of Different Numerals (NUMERALES)": _extract_report_number(report_text, ("Numerals", "Numerales")),
+        "Total Number of Different Prepositions (PREPOSICIONES)": _extract_report_number(report_text, ("Prepositions", "Preposiciones")),
+        "Total Number of Different Interjections (INTERJECCIONES)": _extract_report_number(report_text, ("Interjections", "Interjecciones")),
+        "Total Number of Different Conjunctions (CONJUNCIONES)": _extract_report_number(report_text, ("Conjunctions", "Conjunciones")),
+        "Total Number of Different Morphological Structures MORFOLÓLOGICAS DIFERENTES": _extract_report_number(
+            report_text,
+            (
+                "Total Different Morphological Structures Observed",
+                "Total Different Morphological Structures",
+                "Total de estructuras morfológicas diferentes observadas",
+                "Total de estructuras morfológicas diferentes",
+            ),
+        ),
+        "Total Number of Morphological Structures MORFOLÓGICAS": _extract_report_number(
+            report_text,
+            (
+                "Total Morphological Marking Observed",
+                "Total Morphological Structures Observed",
+                "Total Morphological Structures",
+                "Total de marcación morfológica observada",
+                "Total de estructuras morfológicas observadas",
+            ),
+        ),
+        "Grammatical Complexity Score COMPLEJIDAD GRAMATICAL": _extract_report_number(
+            report_text,
+            (
+                "Total Grammatical Complexity Score",
+                "Total Grammatical Complexity Points",
+                "Grammatical Complexity Score",
+                "Puntuación total de complejidad gramatical",
+                "Puntos totales de complejidad gramatical",
+            ),
+        ),
+        "Total Number of Different Syntactic Structures ESTRUCTURAS SINÁCTICAS DIFERENTES": _extract_report_number(
+            report_text,
+            (
+                "Total Different Syntactic Structures Observed",
+                "Total Different Syntactic Structures",
+                "Total de estructuras sintácticas diferentes observadas",
+                "Total de estructuras sintácticas diferentes",
+            ),
+        ),
+        "Total Number of Syntactic Structures ESTRUCTURAS SINTÁCTICAS": _extract_report_number(
+            report_text,
+            (
+                "Total Syntactic Structures Observed",
+                "Total Syntactic Structures",
+                "Total de estructuras sintácticas observadas",
+                "Total de estructuras sintácticas",
+            ),
+        ),
+    }
+    return [_export_value(values.get(column)) for column in PAALSS_EXPORT_COLUMNS]
+
+
+def _excel_column_name(index: int) -> str:
+    name = ""
+    current = index
+    while current:
+        current, remainder = divmod(current - 1, 26)
+        name = chr(65 + remainder) + name
+    return name
+
+
+def _xlsx_inline_cell(cell_ref: str, value: Any, style_id: int) -> str:
+    text = str(value if value is not None else "NA")
+    preserve = ' xml:space="preserve"' if text != text.strip() else ""
+    return (
+        f'<c r="{cell_ref}" s="{style_id}" t="inlineStr">'
+        f'<is><t{preserve}>{escape(text)}</t></is></c>'
+    )
+
+
+def _analysis_sheet_bytes(record: Dict[str, Any]) -> bytes:
+    headers = list(PAALSS_EXPORT_COLUMNS)
+    row_values = _analysis_export_row(record)
+    last_column = _excel_column_name(len(headers))
+
+    column_xml: List[str] = []
+    for index, (header, value) in enumerate(zip(headers, row_values), start=1):
+        longest = max(len(str(header)), len(str(value)))
+        width = max(12.0, min(42.0, longest * 0.9 + 2.0))
+        column_xml.append(
+            f'<col min="{index}" max="{index}" width="{width:.1f}" customWidth="1"/>'
+        )
+
+    header_cells = "".join(
+        _xlsx_inline_cell(f"{_excel_column_name(index)}1", header, 1)
+        for index, header in enumerate(headers, start=1)
+    )
+    data_cells = "".join(
+        _xlsx_inline_cell(f"{_excel_column_name(index)}2", value, 2)
+        for index, value in enumerate(row_values, start=1)
+    )
+
+    sheet_xml = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
+  <sheetFormatPr defaultRowHeight="18"/>
+  <cols>{''.join(column_xml)}</cols>
+  <sheetData>
+    <row r="1" ht="66" customHeight="1">{header_cells}</row>
+    <row r="2" ht="30" customHeight="1">{data_cells}</row>
+  </sheetData>
+  <autoFilter ref="A1:{last_column}2"/>
+</worksheet>'''
+
+    styles_xml = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="2">
+    <font><sz val="11"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font>
+    <font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font>
+  </fonts>
+  <fills count="3">
+    <fill><patternFill patternType="none"/></fill>
+    <fill><patternFill patternType="gray125"/></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FF1F4E78"/><bgColor indexed="64"/></patternFill></fill>
+  </fills>
+  <borders count="2">
+    <border><left/><right/><top/><bottom/><diagonal/></border>
+    <border><left style="thin"><color rgb="FFD9E2F3"/></left><right style="thin"><color rgb="FFD9E2F3"/></right><top style="thin"><color rgb="FFD9E2F3"/></top><bottom style="thin"><color rgb="FFD9E2F3"/></bottom><diagonal/></border>
+  </borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="3">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+  </cellXfs>
+  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>'''
+
+    content_types = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+</Types>'''
+
+    root_rels = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>'''
+
+    workbook_xml = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <bookViews><workbookView xWindow="0" yWindow="0" windowWidth="24000" windowHeight="12000"/></bookViews>
+  <sheets><sheet name="PAALSS Admin Data View" sheetId="1" r:id="rId1"/></sheets>
+</workbook>'''
+
+    workbook_rels = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>'''
+
+    now_iso = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    core_xml = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:creator>PAALSS Transcript Analyzer</dc:creator>
+  <cp:lastModifiedBy>PAALSS Transcript Analyzer</cp:lastModifiedBy>
+  <dcterms:created xsi:type="dcterms:W3CDTF">{now_iso}</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">{now_iso}</dcterms:modified>
+</cp:coreProperties>'''
+
+    app_xml = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <Application>PAALSS Transcript Analyzer</Application>
+</Properties>'''
+
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("_rels/.rels", root_rels)
+        archive.writestr("xl/workbook.xml", workbook_xml)
+        archive.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
+        archive.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+        archive.writestr("xl/styles.xml", styles_xml)
+        archive.writestr("docProps/core.xml", core_xml)
+        archive.writestr("docProps/app.xml", app_xml)
+    return output.getvalue()
+
+
+def _sheet_filename(record: Dict[str, Any]) -> str:
+    clinician = _export_value(record.get("user_id"))
+    patient = _export_value(record.get("patient_id"))
+    transcript_number = _analysis_export_row(record)[2]
+    stem = f"PAALSS_{clinician}_{patient}_{transcript_number}"
+    safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._")
+    return f"{safe_stem or 'PAALSS_analysis'}.xlsx"
+
+
 def _notify_success(message: str) -> None:
     try:
         st.toast(message)
@@ -1027,14 +1519,6 @@ def _render_sidebar(models: List[str]) -> None:
 
                     with menu_col:
                         with st.popover("⋯", use_container_width=True):
-                            if st.button(
-                                t("open_chat"),
-                                key=f"open_chat_{rid}",
-                                use_container_width=True,
-                            ):
-                                _load_analysis_into_state(rid)
-                                st.rerun()
-
                             if st.button(
                                 t("rename_chat"),
                                 key=f"rename_chat_{rid}",
@@ -1493,7 +1977,7 @@ def _render_search_tab() -> None:
         patient_label = _patient_display(row.get("patient_id"), known_patient_ids)
 
         with st.container(border=True):
-            title_col, open_col = st.columns([0.82, 0.18], vertical_alignment="center")
+            title_col, export_col = st.columns([0.72, 0.28], vertical_alignment="center")
             with title_col:
                 st.markdown(f"**{label}**")
                 st.caption(
@@ -1503,15 +1987,18 @@ def _render_search_tab() -> None:
                 )
                 if row.get("source_filename"):
                     st.caption(f"{t('filename')}: {row.get('source_filename')}")
-            with open_col:
-                if st.button(
-                    t("open_chat"),
-                    key=f"search_open_chat_{rid}",
-                    use_container_width=True,
-                    type="primary",
-                ):
-                    _load_analysis_into_state(rid)
-                    st.rerun()
+            with export_col:
+                full_record = get_analysis(rid)
+                if full_record and _record_accessible(full_record):
+                    st.download_button(
+                        t("export_sheet"),
+                        data=_analysis_sheet_bytes(full_record),
+                        file_name=_sheet_filename(full_record),
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key=f"search_export_sheet_{rid}",
+                        use_container_width=True,
+                        type="primary",
+                    )
 
 
 def _render_analyzer_page() -> None:
