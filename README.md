@@ -55,14 +55,21 @@ Saved data includes:
 - system prompt snapshot used for that run
 - created / updated timestamps
 
-### Sidebar workflow
-The left sidebar now behaves more like ChatGPT:
+### Chat and search workflow
+The analyzer workspace has two top-level tabs:
+- **Chat** contains the existing upload, transcript, analysis, and output workflow.
+- **Search** contains keyword search plus clinician and AAC-user/patient filters.
+
+The left sidebar remains dedicated to the current clinician's saved chat history:
 - each uploaded transcript becomes its own saved entry
 - clicking an entry reloads that analysis
-- keyword search covers titles, filenames, transcripts, reports, recommendations, and IDs
-- filters are available for clinician ID and AAC user/patient ID
-- legacy analyses without a patient assignment appear as `Unnamed AAC user`
+- rename and delete remain available from the three-dot menu
+- change-password and logout controls remain pinned below the scrollable history
 - starting a new analysis clears the current selection without deleting past work
+
+Search covers titles, filenames, transcripts, reports, recommendations, clinician IDs,
+and patient IDs. Legacy analyses without a patient assignment appear as
+`Unnamed AAC user`.
 
 ### New-analysis workflow
 1. An admin adds AAC user/patient IDs in the **AAC Users/Patients** admin tab.

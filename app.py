@@ -67,6 +67,8 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "new_analysis": "Start new analysis",
         "previous_analyses": "Previous analyses",
         "no_previous_analyses": "No saved analyses yet.",
+        "chat_tab": "Chat",
+        "search_tab": "Search",
         "search_chats": "Search chats",
         "search_placeholder": "Search titles, transcripts, reports...",
         "chat_filters": "Filters",
@@ -184,6 +186,8 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "new_analysis": "Iniciar nuevo análisis",
         "previous_analyses": "Análisis anteriores",
         "no_previous_analyses": "Aún no hay análisis guardados.",
+        "chat_tab": "Chat",
+        "search_tab": "Buscar",
         "search_chats": "Buscar chats",
         "search_placeholder": "Buscar en títulos, transcripciones e informes...",
         "chat_filters": "Filtros",
@@ -621,6 +625,7 @@ st.markdown(
 
   section[data-testid="stSidebar"] .st-key-sidebar_analysis_section {
     height: 100% !important;
+    max-height: calc(100dvh - 19rem) !important;
     min-height: 0 !important;
     overflow-y: auto !important;
     overflow-x: hidden !important;
@@ -639,6 +644,9 @@ st.markdown(
   }
 
   section[data-testid="stSidebar"] .st-key-sidebar_account_actions {
+    position: sticky !important;
+    bottom: 0 !important;
+    z-index: 20 !important;
     flex: 0 0 auto !important;
     padding-top: 0.45rem !important;
     padding-bottom: 0.25rem !important;
@@ -982,59 +990,11 @@ def _render_sidebar(models: List[str]) -> None:
             _clear_analysis_state()
             st.rerun()
 
+        # Keep the original sidebar focused only on the current clinician's
+        # saved chats. Search and filters live in the main Search tab.
         with st.container(key="sidebar_analysis_section"):
             st.markdown(f"### {t('previous_analyses')}")
-            search_query = st.text_input(
-                t("search_chats"),
-                placeholder=t("search_placeholder"),
-                key="chat_search_query",
-            )
-
-            patient_rows = list_aac_users()
-            patient_ids = [str(row.get("patient_id") or "").strip() for row in patient_rows]
-            patient_ids = [patient_id for patient_id in patient_ids if patient_id]
-            known_patient_ids = set(patient_ids)
-
-            clinician_filter = ""
-            patient_filter = ""
-            with st.expander(t("chat_filters"), expanded=False):
-                if is_admin:
-                    clinician_ids = [
-                        str(row.get("user_id") or "").strip()
-                        for row in list_users()
-                        if str(row.get("user_id") or "").strip()
-                    ]
-                    clinician_filter = st.selectbox(
-                        t("clinician_id"),
-                        options=[""] + clinician_ids,
-                        format_func=lambda value: t("all_clinicians") if not value else value,
-                        key="chat_clinician_filter",
-                    )
-                else:
-                    st.caption(f"{t('clinician_id')}: {st.session_state['user_id']}")
-
-                patient_filter = st.selectbox(
-                    t("aac_user_patient"),
-                    options=["", "__unnamed__"] + patient_ids,
-                    format_func=lambda value: (
-                        t("all_aac_users")
-                        if not value
-                        else t("unnamed_aac_user")
-                        if value == "__unnamed__"
-                        else value
-                    ),
-                    key="chat_patient_filter",
-                )
-
-            rows = search_analyses(
-                current_user_id=str(st.session_state["user_id"]),
-                is_admin=is_admin,
-                query=search_query,
-                clinician_id=clinician_filter,
-                patient_filter=patient_filter,
-                limit=200,
-            )
-
+            rows = list_analyses_for_user(str(st.session_state["user_id"]), limit=200)
             if rows:
                 for row in rows:
                     rid = int(row["id"])
@@ -1043,8 +1003,6 @@ def _render_sidebar(models: List[str]) -> None:
                         or row.get("source_filename")
                         or f"Analysis {rid}"
                     )
-                    patient_label = _patient_display(row.get("patient_id"), known_patient_ids)
-                    clinician_label = str(row.get("user_id") or "")
 
                     title_col, menu_col = st.columns(
                         [8.5, 1.5],
@@ -1060,10 +1018,6 @@ def _render_sidebar(models: List[str]) -> None:
                         ):
                             _load_analysis_into_state(rid)
                             st.rerun()
-                        st.caption(
-                            f"{t('clinician_id')}: {clinician_label} · "
-                            f"{t('patient')}: {patient_label}"
-                        )
 
                     with menu_col:
                         with st.popover("⋯", use_container_width=True):
@@ -1088,8 +1042,6 @@ def _render_sidebar(models: List[str]) -> None:
                                 use_container_width=True,
                             ):
                                 _delete_chat_dialog(rid, label)
-            elif search_query or clinician_filter or patient_filter:
-                st.caption(t("no_matching_analyses"))
             else:
                 st.caption(t("no_previous_analyses"))
 
@@ -1120,6 +1072,7 @@ def _render_sidebar(models: List[str]) -> None:
             if st.button(t("logout"), use_container_width=True):
                 _logout()
                 st.rerun()
+
 
 def _render_admin_page(models: List[str]) -> None:
     st.title(t("admin"))
@@ -1217,11 +1170,8 @@ def _render_admin_page(models: List[str]) -> None:
             st.caption(t("no_aac_users"))
 
 
-def _render_analyzer_page() -> None:
-    _ensure_active_selection()
+def _render_chat_tab() -> None:
     record = _current_record()
-
-    st.title(_app_title())
 
     left, right = st.columns([0.56, 0.44], gap="large")
 
@@ -1446,6 +1396,127 @@ def _render_analyzer_page() -> None:
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             use_container_width=True,
         )
+
+
+def _render_search_tab() -> None:
+    is_admin = st.session_state.get("role") == "admin"
+    current_user_id = str(st.session_state["user_id"])
+
+    st.subheader(t("search_chats"))
+
+    patient_rows = list_aac_users()
+    patient_ids = sorted(
+        {
+            str(row.get("patient_id") or "").strip()
+            for row in patient_rows
+            if str(row.get("patient_id") or "").strip()
+        },
+        key=str.lower,
+    )
+    known_patient_ids = set(patient_ids)
+
+    search_query = st.text_input(
+        t("search_chats"),
+        placeholder=t("search_placeholder"),
+        key="search_page_query",
+        label_visibility="collapsed",
+    )
+
+    filter_cols = st.columns(2, gap="medium")
+    clinician_filter = ""
+    with filter_cols[0]:
+        if is_admin:
+            clinician_ids = sorted(
+                {
+                    str(row.get("user_id") or "").strip()
+                    for row in list_users()
+                    if str(row.get("user_id") or "").strip()
+                },
+                key=str.lower,
+            )
+            clinician_filter = st.selectbox(
+                t("clinician_id"),
+                options=[""] + clinician_ids,
+                format_func=lambda value: t("all_clinicians") if not value else value,
+                key="search_page_clinician_filter",
+            )
+        else:
+            st.text_input(
+                t("clinician_id"),
+                value=current_user_id,
+                disabled=True,
+                key="search_page_current_clinician",
+            )
+
+    with filter_cols[1]:
+        patient_filter = st.selectbox(
+            t("aac_user_patient"),
+            options=["", "__unnamed__"] + patient_ids,
+            format_func=lambda value: (
+                t("all_aac_users")
+                if not value
+                else t("unnamed_aac_user")
+                if value == "__unnamed__"
+                else value
+            ),
+            key="search_page_patient_filter",
+        )
+
+    rows = search_analyses(
+        current_user_id=current_user_id,
+        is_admin=is_admin,
+        query=search_query,
+        clinician_id=clinician_filter,
+        patient_filter=patient_filter,
+        limit=200,
+    )
+
+    if not rows:
+        st.info(t("no_matching_analyses"))
+        return
+
+    st.caption(f"{len(rows)} result{'s' if len(rows) != 1 else ''}")
+    for row in rows:
+        rid = int(row["id"])
+        label = str(
+            row.get("title")
+            or row.get("source_filename")
+            or f"Analysis {rid}"
+        )
+        clinician_label = str(row.get("user_id") or "")
+        patient_label = _patient_display(row.get("patient_id"), known_patient_ids)
+
+        with st.container(border=True):
+            title_col, open_col = st.columns([0.82, 0.18], vertical_alignment="center")
+            with title_col:
+                st.markdown(f"**{label}**")
+                st.caption(
+                    f"{t('clinician_id')}: {clinician_label} · "
+                    f"{t('patient')}: {patient_label} · "
+                    f"{t('updated')}: {_fmt_ts(row.get('updated_at'))}"
+                )
+                if row.get("source_filename"):
+                    st.caption(f"{t('filename')}: {row.get('source_filename')}")
+            with open_col:
+                if st.button(
+                    t("open_chat"),
+                    key=f"search_open_chat_{rid}",
+                    use_container_width=True,
+                    type="primary",
+                ):
+                    _load_analysis_into_state(rid)
+                    st.rerun()
+
+
+def _render_analyzer_page() -> None:
+    _ensure_active_selection()
+    st.title(_app_title())
+
+    chat_tab, search_tab = st.tabs([t("chat_tab"), t("search_tab")])
+    with chat_tab:
+        _render_chat_tab()
+    with search_tab:
+        _render_search_tab()
 
 
 # ---------------- app ----------------
