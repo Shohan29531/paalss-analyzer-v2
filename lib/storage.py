@@ -183,6 +183,15 @@ def init_db() -> None:
         )
         """
     )
+    _exec(
+        """
+        CREATE TABLE IF NOT EXISTS aac_users (
+            patient_id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
 
     if _USE_PG:
         _exec(
@@ -236,6 +245,7 @@ def init_db() -> None:
     _add_column("analyses", "recommendation_text", "TEXT")
     _add_column("analyses", "model_snapshot", "TEXT")
     _add_column("analyses", "system_prompt_snapshot", "TEXT")
+    _add_column("analyses", "patient_id", "TEXT")
 
     if _USE_PG:
         _exec(
@@ -243,6 +253,10 @@ def init_db() -> None:
         )
     else:
         _exec("CREATE UNIQUE INDEX IF NOT EXISTS analyses_analysis_uid_idx ON analyses (analysis_uid)")
+
+    _exec("CREATE INDEX IF NOT EXISTS analyses_user_id_idx ON analyses (user_id)")
+    _exec("CREATE INDEX IF NOT EXISTS analyses_patient_id_idx ON analyses (patient_id)")
+    _exec("CREATE INDEX IF NOT EXISTS analyses_updated_at_idx ON analyses (updated_at)")
 
     _exec(
         "UPDATE users SET language = ? WHERE language IS NULL OR language = ''"
@@ -448,6 +462,46 @@ def list_users() -> List[Dict[str, Any]]:
     return _rows_to_dicts(rows)
 
 
+# ---------------- AAC users / patients ----------------
+
+
+def upsert_aac_user(patient_id: str) -> bool:
+    clean_id = str(patient_id or "").strip()
+    if not clean_id:
+        return False
+
+    now = _now_iso()
+    if _USE_PG:
+        _exec(
+            """
+            INSERT INTO aac_users (patient_id, created_at, updated_at)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (patient_id)
+            DO UPDATE SET updated_at = EXCLUDED.updated_at
+            """,
+            (clean_id, now, now),
+        )
+    else:
+        _exec(
+            """
+            INSERT INTO aac_users (patient_id, created_at, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(patient_id)
+            DO UPDATE SET updated_at = excluded.updated_at
+            """,
+            (clean_id, now, now),
+        )
+    return True
+
+
+def list_aac_users() -> List[Dict[str, Any]]:
+    rows = _exec(
+        "SELECT patient_id, created_at, updated_at FROM aac_users ORDER BY patient_id",
+        fetch="all",
+    )
+    return _rows_to_dicts(rows)
+
+
 # ---------------- sessions ----------------
 
 
@@ -511,6 +565,7 @@ def create_analysis(
     source_filename: str,
     transcript_text: str,
     meta: Optional[Dict[str, Any]] = None,
+    patient_id: Optional[str] = None,
 ) -> int:
     now = _now_iso()
     analysis_uid = uuid.uuid4().hex
@@ -521,9 +576,9 @@ def create_analysis(
             INSERT INTO analyses (
                 analysis_uid, user_id, role, title, source_filename, transcript_text,
                 meta_json, report_text, recommendation_text, model_snapshot,
-                system_prompt_snapshot, created_at, updated_at
+                system_prompt_snapshot, patient_id, created_at, updated_at
             )
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             RETURNING id
             """,
             (
@@ -538,6 +593,7 @@ def create_analysis(
                 "",
                 "",
                 "",
+                str(patient_id or "").strip() or None,
                 now,
                 now,
             ),
@@ -550,9 +606,9 @@ def create_analysis(
         INSERT INTO analyses (
             analysis_uid, user_id, role, title, source_filename, transcript_text,
             meta_json, report_text, recommendation_text, model_snapshot,
-            system_prompt_snapshot, created_at, updated_at
+            system_prompt_snapshot, patient_id, created_at, updated_at
         )
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             analysis_uid,
@@ -566,6 +622,7 @@ def create_analysis(
             "",
             "",
             "",
+            str(patient_id or "").strip() or None,
             now,
             now,
         ),
@@ -644,7 +701,7 @@ def list_analyses_for_user(user_id: str, limit: int = 200) -> List[Dict[str, Any
     rows = _exec(
         """
         SELECT id, analysis_uid, title, source_filename, updated_at, created_at,
-               model_snapshot, user_id
+               model_snapshot, user_id, patient_id
         FROM analyses
         WHERE user_id = ?
         ORDER BY updated_at DESC
@@ -654,7 +711,7 @@ def list_analyses_for_user(user_id: str, limit: int = 200) -> List[Dict[str, Any
         else
         """
         SELECT id, analysis_uid, title, source_filename, updated_at, created_at,
-               model_snapshot, user_id
+               model_snapshot, user_id, patient_id
         FROM analyses
         WHERE user_id = %s
         ORDER BY updated_at DESC
@@ -666,32 +723,123 @@ def list_analyses_for_user(user_id: str, limit: int = 200) -> List[Dict[str, Any
     return _rows_to_dicts(rows)
 
 
+def search_analyses(
+    *,
+    current_user_id: str,
+    is_admin: bool,
+    query: str = "",
+    clinician_id: Optional[str] = None,
+    patient_filter: Optional[str] = None,
+    limit: int = 200,
+) -> List[Dict[str, Any]]:
+    """Search saved chats while enforcing clinician/admin access rules.
+
+    ``analyses.user_id`` is the clinician ID. ``patient_filter`` accepts a
+    concrete patient ID, ``__unnamed__`` for missing/unregistered patients, or
+    a false-y value for all patients.
+    """
+
+    placeholder = "%s" if _USE_PG else "?"
+    conditions: List[str] = []
+    params: List[Any] = []
+
+    if is_admin:
+        clean_clinician = str(clinician_id or "").strip()
+        if clean_clinician:
+            conditions.append(f"a.user_id = {placeholder}")
+            params.append(clean_clinician)
+    else:
+        conditions.append(f"a.user_id = {placeholder}")
+        params.append(str(current_user_id or ""))
+
+    clean_patient = str(patient_filter or "").strip()
+    if clean_patient == "__unnamed__":
+        conditions.append(
+            "(a.patient_id IS NULL OR TRIM(a.patient_id) = '' "
+            "OR NOT EXISTS (SELECT 1 FROM aac_users au WHERE au.patient_id = a.patient_id))"
+        )
+    elif clean_patient:
+        conditions.append(f"a.patient_id = {placeholder}")
+        params.append(clean_patient)
+
+    clean_query = str(query or "").strip().lower()
+    if clean_query:
+        like_value = f"%{clean_query}%"
+        searchable_columns = [
+            "a.title",
+            "a.source_filename",
+            "a.transcript_text",
+            "a.report_text",
+            "a.recommendation_text",
+            "a.user_id",
+            "a.patient_id",
+        ]
+        query_parts: List[str] = []
+        for column in searchable_columns:
+            query_parts.append(f"LOWER(COALESCE({column}, '')) LIKE {placeholder}")
+            params.append(like_value)
+        conditions.append(f"({' OR '.join(query_parts)})")
+
+    where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    params.append(max(1, int(limit)))
+    rows = _exec(
+        f"""
+        SELECT a.id, a.analysis_uid, a.title, a.source_filename,
+               a.updated_at, a.created_at, a.model_snapshot,
+               a.user_id, a.patient_id
+        FROM analyses a
+        {where_sql}
+        ORDER BY a.updated_at DESC
+        LIMIT {placeholder}
+        """,
+        tuple(params),
+        fetch="all",
+    )
+    return _rows_to_dicts(rows)
+
+
 def rename_analysis_for_user(
     analysis_id: int,
     user_id: str,
     title: str,
+    is_admin: bool = False,
 ) -> bool:
     clean_title = str(title or "").strip()
     if not clean_title:
         return False
 
-    row = _exec(
-        "SELECT id FROM analyses WHERE id = ? AND user_id = ?"
-        if not _USE_PG
-        else "SELECT id FROM analyses WHERE id = %s AND user_id = %s",
-        (analysis_id, user_id),
-        fetch="one",
-    )
+    if is_admin:
+        row = _exec(
+            "SELECT id FROM analyses WHERE id = ?" if not _USE_PG else "SELECT id FROM analyses WHERE id = %s",
+            (analysis_id,),
+            fetch="one",
+        )
+    else:
+        row = _exec(
+            "SELECT id FROM analyses WHERE id = ? AND user_id = ?"
+            if not _USE_PG
+            else "SELECT id FROM analyses WHERE id = %s AND user_id = %s",
+            (analysis_id, user_id),
+            fetch="one",
+        )
 
     if not row:
         return False
 
-    _exec(
-        "UPDATE analyses SET title = ? WHERE id = ? AND user_id = ?"
-        if not _USE_PG
-        else "UPDATE analyses SET title = %s WHERE id = %s AND user_id = %s",
-        (clean_title, analysis_id, user_id),
-    )
+    if is_admin:
+        _exec(
+            "UPDATE analyses SET title = ? WHERE id = ?"
+            if not _USE_PG
+            else "UPDATE analyses SET title = %s WHERE id = %s",
+            (clean_title, analysis_id),
+        )
+    else:
+        _exec(
+            "UPDATE analyses SET title = ? WHERE id = ? AND user_id = ?"
+            if not _USE_PG
+            else "UPDATE analyses SET title = %s WHERE id = %s AND user_id = %s",
+            (clean_title, analysis_id, user_id),
+        )
 
     return True
 
@@ -699,23 +847,37 @@ def rename_analysis_for_user(
 def delete_analysis_for_user(
     analysis_id: int,
     user_id: str,
+    is_admin: bool = False,
 ) -> bool:
-    row = _exec(
-        "SELECT id FROM analyses WHERE id = ? AND user_id = ?"
-        if not _USE_PG
-        else "SELECT id FROM analyses WHERE id = %s AND user_id = %s",
-        (analysis_id, user_id),
-        fetch="one",
-    )
+    if is_admin:
+        row = _exec(
+            "SELECT id FROM analyses WHERE id = ?" if not _USE_PG else "SELECT id FROM analyses WHERE id = %s",
+            (analysis_id,),
+            fetch="one",
+        )
+    else:
+        row = _exec(
+            "SELECT id FROM analyses WHERE id = ? AND user_id = ?"
+            if not _USE_PG
+            else "SELECT id FROM analyses WHERE id = %s AND user_id = %s",
+            (analysis_id, user_id),
+            fetch="one",
+        )
 
     if not row:
         return False
 
-    _exec(
-        "DELETE FROM analyses WHERE id = ? AND user_id = ?"
-        if not _USE_PG
-        else "DELETE FROM analyses WHERE id = %s AND user_id = %s",
-        (analysis_id, user_id),
-    )
+    if is_admin:
+        _exec(
+            "DELETE FROM analyses WHERE id = ?" if not _USE_PG else "DELETE FROM analyses WHERE id = %s",
+            (analysis_id,),
+        )
+    else:
+        _exec(
+            "DELETE FROM analyses WHERE id = ? AND user_id = ?"
+            if not _USE_PG
+            else "DELETE FROM analyses WHERE id = %s AND user_id = %s",
+            (analysis_id, user_id),
+        )
 
     return True

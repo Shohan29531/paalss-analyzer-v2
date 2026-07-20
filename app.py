@@ -30,12 +30,15 @@ from lib.storage import (
     get_system_prompt,
     get_user_language,
     init_db,
+    list_aac_users,
     list_analyses_for_user,
     list_users,
     rename_analysis_for_user,
+    search_analyses,
     set_active_model,
     set_system_prompt,
     set_user_language,
+    upsert_aac_user,
     upsert_user,
     update_analysis,
     verify_user,
@@ -64,6 +67,15 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "new_analysis": "Start new analysis",
         "previous_analyses": "Previous analyses",
         "no_previous_analyses": "No saved analyses yet.",
+        "search_chats": "Search chats",
+        "search_placeholder": "Search titles, transcripts, reports...",
+        "chat_filters": "Filters",
+        "all_clinicians": "All clinicians",
+        "all_aac_users": "All AAC users",
+        "clinician_id": "Clinician ID",
+        "aac_user_patient": "AAC user / patient",
+        "unnamed_aac_user": "Unnamed AAC user",
+        "no_matching_analyses": "No chats match these filters.",
         "open_chat": "Open",
         "rename_chat": "Rename chat",
         "delete_chat": "Delete chat",
@@ -89,6 +101,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "analyzer": "Analyzer",
         "system_settings": "System settings",
         "users": "Users",
+        "aac_users_patients": "AAC Users/Patients",
         "active_model": "Active model",
         "refresh_models": "Refresh models",
         "save_model": "Save model",
@@ -103,6 +116,13 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "save_user": "Save user",
         "user_saved": "User saved.",
         "existing_users": "Existing users",
+        "add_aac_user": "Add or update AAC user/patient",
+        "aac_user_id": "AAC user / patient ID",
+        "save_aac_user": "Save AAC user",
+        "aac_user_saved": "AAC user saved.",
+        "aac_user_required": "AAC user / patient ID is required.",
+        "existing_aac_users": "Existing AAC users/patients",
+        "no_aac_users": "No AAC users/patients have been added yet.",
         "change_password": "Change password",
         "current_password": "Current password",
         "new_password": "New password",
@@ -112,6 +132,9 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "upload_title": "Upload transcript",
         "upload_help": "Each upload creates its own saved analysis entry on the left.",
         "uploader_label": "Upload a transcript (.docx or .txt)",
+        "select_patient_first": "Select the AAC user/patient before uploading the transcript.",
+        "select_aac_user": "Select an AAC user / patient",
+        "start_new_to_upload": "Click Start new analysis to select a patient and upload another transcript.",
         "detected_info": "Detected sample info",
         "title": "Title",
         "save_title": "Save title",
@@ -137,6 +160,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "created": "Created",
         "updated": "Updated",
         "id": "ID",
+        "patient": "AAC user / patient",
         "user_prompt_intro": "Analyze the following transcript according to PAALSS and write the full report.",
         "user_prompt_transcript": "TRANSCRIPT (numbered enunciados):",
         "empty_state": "Upload a transcript to create the first saved analysis.",
@@ -160,6 +184,15 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "new_analysis": "Iniciar nuevo análisis",
         "previous_analyses": "Análisis anteriores",
         "no_previous_analyses": "Aún no hay análisis guardados.",
+        "search_chats": "Buscar chats",
+        "search_placeholder": "Buscar en títulos, transcripciones e informes...",
+        "chat_filters": "Filtros",
+        "all_clinicians": "Todos los clínicos",
+        "all_aac_users": "Todos los usuarios de CAA",
+        "clinician_id": "ID del clínico",
+        "aac_user_patient": "Usuario de CAA / paciente",
+        "unnamed_aac_user": "Usuario de CAA sin nombre",
+        "no_matching_analyses": "Ningún chat coincide con estos filtros.",
         "open_chat": "Abrir",
         "rename_chat": "Renombrar chat",
         "delete_chat": "Eliminar chat",
@@ -185,6 +218,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "analyzer": "Analizador",
         "system_settings": "Configuración del sistema",
         "users": "Usuarios",
+        "aac_users_patients": "Usuarios de CAA/Pacientes",
         "active_model": "Modelo activo",
         "refresh_models": "Actualizar modelos",
         "save_model": "Guardar modelo",
@@ -199,6 +233,13 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "save_user": "Guardar usuario",
         "user_saved": "Usuario guardado.",
         "existing_users": "Usuarios existentes",
+        "add_aac_user": "Agregar o actualizar usuario de CAA/paciente",
+        "aac_user_id": "ID del usuario de CAA / paciente",
+        "save_aac_user": "Guardar usuario de CAA",
+        "aac_user_saved": "Usuario de CAA guardado.",
+        "aac_user_required": "Se requiere el ID del usuario de CAA / paciente.",
+        "existing_aac_users": "Usuarios de CAA/pacientes existentes",
+        "no_aac_users": "Todavía no se han agregado usuarios de CAA/pacientes.",
         "change_password": "Cambiar contraseña",
         "current_password": "Contraseña actual",
         "new_password": "Nueva contraseña",
@@ -208,6 +249,9 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "upload_title": "Subir transcripción",
         "upload_help": "Cada archivo subido crea su propia entrada guardada en la izquierda.",
         "uploader_label": "Sube una transcripción (.docx o .txt)",
+        "select_patient_first": "Selecciona el usuario de CAA/paciente antes de subir la transcripción.",
+        "select_aac_user": "Selecciona un usuario de CAA / paciente",
+        "start_new_to_upload": "Haz clic en Iniciar nuevo análisis para seleccionar un paciente y subir otra transcripción.",
         "detected_info": "Información detectada de la muestra",
         "title": "Título",
         "save_title": "Guardar título",
@@ -233,6 +277,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "created": "Creado",
         "updated": "Actualizado",
         "id": "ID",
+        "patient": "Usuario de CAA / paciente",
         "user_prompt_intro": "Analiza la siguiente transcripción según PAALSS y escribe el informe completo.",
         "user_prompt_transcript": "TRANSCRIPCIÓN (enunciados numerados):",
         "empty_state": "Sube una transcripción para crear el primer análisis guardado.",
@@ -626,6 +671,15 @@ def _fmt_ts(value: Any) -> str:
         return s
 
 
+def _patient_display(patient_id: Any, known_patient_ids: Optional[set[str]] = None) -> str:
+    clean_id = str(patient_id or "").strip()
+    if not clean_id:
+        return t("unnamed_aac_user")
+    if known_patient_ids is not None and clean_id not in known_patient_ids:
+        return t("unnamed_aac_user")
+    return clean_id
+
+
 def _notify_success(message: str) -> None:
     try:
         st.toast(message)
@@ -642,6 +696,7 @@ def _clear_analysis_state() -> None:
         "editor_meta",
         "report_text",
         "recommendation_text",
+        "selected_patient_id",
     ]:
         st.session_state.pop(key, None)
 
@@ -656,6 +711,9 @@ def _apply_pending_analysis_state() -> None:
     if st.session_state.pop("_pending_clear_analysis_state", False):
         _clear_analysis_state()
         st.session_state["suppress_autoload"] = False
+
+    if st.session_state.pop("_pending_selected_patient_clear", False):
+        st.session_state.pop("selected_patient_id", None)
 
 
 _dialog = getattr(st, "dialog", None) or getattr(st, "experimental_dialog")
@@ -686,6 +744,7 @@ def _rename_chat_dialog(analysis_id: int, current_title: str) -> None:
             analysis_id=int(analysis_id),
             user_id=str(st.session_state["user_id"]),
             title=clean_title,
+            is_admin=st.session_state.get("role") == "admin",
         )
         if not renamed:
             st.error(t("rename_failed"))
@@ -721,6 +780,7 @@ def _delete_chat_dialog(analysis_id: int, current_title: str) -> None:
         deleted = delete_analysis_for_user(
             analysis_id=int(analysis_id),
             user_id=str(st.session_state["user_id"]),
+            is_admin=st.session_state.get("role") == "admin",
         )
         if not deleted:
             st.error(t("delete_failed"))
@@ -743,6 +803,8 @@ def _delete_chat_dialog(analysis_id: int, current_title: str) -> None:
 def _record_accessible(record: Optional[Dict[str, Any]]) -> bool:
     if not record:
         return False
+    if st.session_state.get("role") == "admin":
+        return True
     current_user = st.session_state.get("user_id")
     return str(record.get("user_id") or "") == str(current_user or "")
 
@@ -793,6 +855,10 @@ def _save_transcript() -> None:
 def _create_analysis_from_upload(uploaded: Any) -> None:
     if uploaded is None:
         return
+    patient_id = str(st.session_state.get("selected_patient_id") or "").strip()
+    if not patient_id:
+        st.error(t("select_patient_first"))
+        return
     if uploaded.name.lower().endswith(".docx"):
         parsed = parse_transcript_docx(uploaded.getvalue())
     else:
@@ -807,9 +873,11 @@ def _create_analysis_from_upload(uploaded: Any) -> None:
         source_filename=str(uploaded.name),
         transcript_text=transcript_text,
         meta=meta,
+        patient_id=patient_id,
     )
     _load_analysis_into_state(int(analysis_id))
     st.session_state["uploader_nonce"] = int(st.session_state.get("uploader_nonce", 0)) + 1
+    st.session_state["_pending_selected_patient_clear"] = True
     st.rerun()
 
 
@@ -893,12 +961,13 @@ def _render_sidebar(models: List[str]) -> None:
         st.markdown(f"## {_app_title()}")
         _render_language_checkboxes("sidebar")
 
-        role_key = 'role_admin' if st.session_state.get('role') == 'admin' else 'role_user'
+        is_admin = st.session_state.get("role") == "admin"
+        role_key = "role_admin" if is_admin else "role_user"
         st.caption(f"{t('signed_in_as')}: **{st.session_state['user_id']}** ({t(role_key)})")
         current_model = get_active_model(DEFAULT_MODEL_FROM_CONFIG)
         st.caption(f"**{t('active_model')}:** {current_model}")
 
-        if st.session_state.get("role") == "admin":
+        if is_admin:
             st.radio(
                 t("navigation"),
                 options=["analyzer", "admin"],
@@ -910,21 +979,62 @@ def _render_sidebar(models: List[str]) -> None:
 
         if st.button(t("new_analysis"), use_container_width=True):
             st.session_state["suppress_autoload"] = True
-            for key in [
-                "active_analysis_id",
-                "editor_title",
-                "editor_transcript_text",
-                "editor_source_filename",
-                "editor_meta",
-                "report_text",
-                "recommendation_text",
-            ]:
-                st.session_state.pop(key, None)
+            _clear_analysis_state()
             st.rerun()
 
         with st.container(key="sidebar_analysis_section"):
             st.markdown(f"### {t('previous_analyses')}")
-            rows = list_analyses_for_user(str(st.session_state["user_id"]), limit=200)
+            search_query = st.text_input(
+                t("search_chats"),
+                placeholder=t("search_placeholder"),
+                key="chat_search_query",
+            )
+
+            patient_rows = list_aac_users()
+            patient_ids = [str(row.get("patient_id") or "").strip() for row in patient_rows]
+            patient_ids = [patient_id for patient_id in patient_ids if patient_id]
+            known_patient_ids = set(patient_ids)
+
+            clinician_filter = ""
+            patient_filter = ""
+            with st.expander(t("chat_filters"), expanded=False):
+                if is_admin:
+                    clinician_ids = [
+                        str(row.get("user_id") or "").strip()
+                        for row in list_users()
+                        if str(row.get("user_id") or "").strip()
+                    ]
+                    clinician_filter = st.selectbox(
+                        t("clinician_id"),
+                        options=[""] + clinician_ids,
+                        format_func=lambda value: t("all_clinicians") if not value else value,
+                        key="chat_clinician_filter",
+                    )
+                else:
+                    st.caption(f"{t('clinician_id')}: {st.session_state['user_id']}")
+
+                patient_filter = st.selectbox(
+                    t("aac_user_patient"),
+                    options=["", "__unnamed__"] + patient_ids,
+                    format_func=lambda value: (
+                        t("all_aac_users")
+                        if not value
+                        else t("unnamed_aac_user")
+                        if value == "__unnamed__"
+                        else value
+                    ),
+                    key="chat_patient_filter",
+                )
+
+            rows = search_analyses(
+                current_user_id=str(st.session_state["user_id"]),
+                is_admin=is_admin,
+                query=search_query,
+                clinician_id=clinician_filter,
+                patient_filter=patient_filter,
+                limit=200,
+            )
+
             if rows:
                 for row in rows:
                     rid = int(row["id"])
@@ -933,6 +1043,8 @@ def _render_sidebar(models: List[str]) -> None:
                         or row.get("source_filename")
                         or f"Analysis {rid}"
                     )
+                    patient_label = _patient_display(row.get("patient_id"), known_patient_ids)
+                    clinician_label = str(row.get("user_id") or "")
 
                     title_col, menu_col = st.columns(
                         [8.5, 1.5],
@@ -948,6 +1060,10 @@ def _render_sidebar(models: List[str]) -> None:
                         ):
                             _load_analysis_into_state(rid)
                             st.rerun()
+                        st.caption(
+                            f"{t('clinician_id')}: {clinician_label} · "
+                            f"{t('patient')}: {patient_label}"
+                        )
 
                     with menu_col:
                         with st.popover("⋯", use_container_width=True):
@@ -972,6 +1088,8 @@ def _render_sidebar(models: List[str]) -> None:
                                 use_container_width=True,
                             ):
                                 _delete_chat_dialog(rid, label)
+            elif search_query or clinician_filter or patient_filter:
+                st.caption(t("no_matching_analyses"))
             else:
                 st.caption(t("no_previous_analyses"))
 
@@ -1003,10 +1121,11 @@ def _render_sidebar(models: List[str]) -> None:
                 _logout()
                 st.rerun()
 
-
 def _render_admin_page(models: List[str]) -> None:
     st.title(t("admin"))
-    tab_system, tab_users = st.tabs([t("system_settings"), t("users")])
+    tab_system, tab_users, tab_patients = st.tabs(
+        [t("system_settings"), t("users"), t("aac_users_patients")]
+    )
 
     with tab_system:
         st.subheader(t("active_model"))
@@ -1074,6 +1193,29 @@ def _render_admin_page(models: List[str]) -> None:
                 })
             st.dataframe(pretty_rows, use_container_width=True)
 
+    with tab_patients:
+        st.subheader(t("add_aac_user"))
+        with st.form("create_or_update_aac_user_form"):
+            patient_id = st.text_input(t("aac_user_id"))
+            patient_submitted = st.form_submit_button(t("save_aac_user"))
+        if patient_submitted:
+            if not patient_id.strip():
+                st.error(t("aac_user_required"))
+            elif upsert_aac_user(patient_id.strip()):
+                _notify_success(t("aac_user_saved"))
+                st.rerun()
+
+        st.subheader(t("existing_aac_users"))
+        patient_rows = list_aac_users()
+        if patient_rows:
+            st.dataframe(
+                [{t("aac_user_id"): row.get("patient_id")} for row in patient_rows],
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.caption(t("no_aac_users"))
+
 
 def _render_analyzer_page() -> None:
     _ensure_active_selection()
@@ -1084,21 +1226,42 @@ def _render_analyzer_page() -> None:
     left, right = st.columns([0.56, 0.44], gap="large")
 
     with left:
-        st.subheader(t("upload_title"))
-        st.caption(t("upload_help"))
-        uploaded = st.file_uploader(
-            t("uploader_label"),
-            type=["docx", "txt"],
-            accept_multiple_files=False,
-            key=f"transcript_uploader_{st.session_state.get('uploader_nonce', 0)}",
-        )
-        if uploaded is not None:
-            _create_analysis_from_upload(uploaded)
-
-        record = _current_record()
         if not record:
+            st.subheader(t("upload_title"))
+            st.caption(t("upload_help"))
+
+            patient_rows = list_aac_users()
+            patient_ids = [
+                str(row.get("patient_id") or "").strip()
+                for row in patient_rows
+                if str(row.get("patient_id") or "").strip()
+            ]
+            selected_patient_id = st.selectbox(
+                t("aac_user_patient"),
+                options=[""] + patient_ids,
+                format_func=lambda value: t("select_aac_user") if not value else value,
+                key="selected_patient_id",
+            )
+
+            if not patient_ids:
+                st.warning(t("no_aac_users"))
+            elif not selected_patient_id:
+                st.info(t("select_patient_first"))
+
+            uploaded = st.file_uploader(
+                t("uploader_label"),
+                type=["docx", "txt"],
+                accept_multiple_files=False,
+                disabled=not bool(selected_patient_id),
+                key=f"transcript_uploader_{st.session_state.get('uploader_nonce', 0)}",
+            )
+            if uploaded is not None:
+                _create_analysis_from_upload(uploaded)
+
             st.info(t("empty_state"))
             return
+
+        st.caption(t("start_new_to_upload"))
 
         meta = st.session_state.get("editor_meta") or {}
         if meta:
@@ -1243,6 +1406,16 @@ def _render_analyzer_page() -> None:
             return
 
         st.markdown(f"**{t('current_record')}**")
+        known_patient_ids = {
+            str(row.get("patient_id") or "").strip()
+            for row in list_aac_users()
+            if str(row.get("patient_id") or "").strip()
+        }
+        st.caption(f"{t('clinician_id')}: {record.get('user_id') or '—'}")
+        st.caption(
+            f"{t('patient')}: "
+            f"{_patient_display(record.get('patient_id'), known_patient_ids)}"
+        )
         st.caption(f"{t('filename')}: {record.get('source_filename') or '—'}")
         st.caption(f"{t('id')}: {record.get('analysis_uid')}")
         st.caption(f"{t('created')}: {_fmt_ts(record.get('created_at'))}")

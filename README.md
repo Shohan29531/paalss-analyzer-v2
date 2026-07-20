@@ -9,6 +9,8 @@ This version adds:
 - two roles: `admin` and `user`
 - persistent saved analyses in a database
 - a ChatGPT-style analysis list in the sidebar
+- searchable chat history with clinician and AAC-user filters
+- admin-managed AAC user/patient IDs
 - global admin control over the active model and system prompt
 
 The app is intended for research and clinical drafting support. Its output is not diagnostic and should be reviewed by a qualified clinician or researcher.
@@ -20,6 +22,8 @@ The app is intended for research and clinical drafting support. Its output is no
 - The first account ever created becomes the first `admin`.
 - `admin` users can:
   - add/update users and admins
+  - add/update AAC users/patients
+  - search and open analyses across clinicians
   - change the global system prompt
   - change the active model
   - run analyses like any other user
@@ -39,6 +43,8 @@ Even if the same file is uploaded twice:
 - each one has a distinct ID and timestamp
 
 Saved data includes:
+- clinician ID (the signed-in user ID)
+- AAC user/patient ID selected before upload
 - title
 - source filename
 - parsed transcript text
@@ -53,7 +59,17 @@ Saved data includes:
 The left sidebar now behaves more like ChatGPT:
 - each uploaded transcript becomes its own saved entry
 - clicking an entry reloads that analysis
+- keyword search covers titles, filenames, transcripts, reports, recommendations, and IDs
+- filters are available for clinician ID and AAC user/patient ID
+- legacy analyses without a patient assignment appear as `Unnamed AAC user`
 - starting a new analysis clears the current selection without deleting past work
+
+### New-analysis workflow
+1. An admin adds AAC user/patient IDs in the **AAC Users/Patients** admin tab.
+2. A clinician clicks **Start new analysis**.
+3. The clinician selects an AAC user/patient ID.
+4. The transcript uploader becomes available.
+5. The saved analysis records the signed-in user as the clinician and the selected ID as the patient.
 
 ## Data storage
 
@@ -127,7 +143,12 @@ At startup, the app will create these tables if they do not exist:
 - `users`
 - `sessions`
 - `settings`
+- `aac_users`
 - `analyses`
+
+Existing databases are migrated automatically by adding the nullable
+`analyses.patient_id` column. Existing rows remain valid and are grouped under
+`Unnamed AAC user` until a patient assignment exists.
 
 ## Streamlit Community Cloud deployment
 
