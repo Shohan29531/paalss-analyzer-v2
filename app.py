@@ -30,6 +30,8 @@ from lib.storage import (
     get_user_language,
     init_db,
     list_analyses_for_user,
+    delete_analysis_for_user,
+    rename_analysis_for_user,
     list_users,
     set_active_model,
     set_system_prompt,
@@ -132,6 +134,23 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "untitled_transcript": "Untitled transcript",
         "db_init_failed": "Database initialization failed. Check DATABASE_URL / Supabase connection settings.",
         "db_init_help": "If you are using Supabase on Streamlit Cloud, use the Supavisor session pooler connection string, not the direct db.<project-ref>.supabase.co host.",
+        "open_chat": "Open",
+        "rename_chat": "Rename chat",
+        "delete_chat": "Delete chat",
+        "chat_title": "Chat title",
+        "title_required": "Enter a chat title.",
+        "save": "Save",
+        "cancel": "Cancel",
+        "chat_renamed": "Chat renamed.",
+        "rename_failed": "Could not rename this chat.",
+        "delete_chat_title": "Delete chat?",
+        "delete_chat_warning": (
+            "This will permanently delete the chat, transcript, report, "
+            "and recommendations. This action cannot be undone."
+        ),
+        "confirm_delete": "Delete permanently",
+        "chat_deleted": "Chat deleted.",
+        "delete_failed": "Could not delete this chat.",
     },
     "es": {
         "language": "Idioma",
@@ -214,6 +233,23 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "untitled_transcript": "Transcripción sin título",
         "db_init_failed": "La inicialización de la base de datos falló. Revisa DATABASE_URL y la configuración de conexión de Supabase.",
         "db_init_help": "Si usas Supabase en Streamlit Cloud, utiliza la cadena de conexión de Supavisor en modo session pooler, no el host directo db.<project-ref>.supabase.co.",
+        "open_chat": "Abrir",
+        "rename_chat": "Renombrar chat",
+        "delete_chat": "Eliminar chat",
+        "chat_title": "Título del chat",
+        "title_required": "Escribe un título para el chat.",
+        "save": "Guardar",
+        "cancel": "Cancelar",
+        "chat_renamed": "Chat renombrado.",
+        "rename_failed": "No se pudo renombrar este chat.",
+        "delete_chat_title": "¿Eliminar chat?",
+        "delete_chat_warning": (
+            "Esto eliminará permanentemente el chat, la transcripción, "
+            "el informe y las recomendaciones. Esta acción no se puede deshacer."
+        ),
+        "confirm_delete": "Eliminar permanentemente",
+        "chat_deleted": "Chat eliminado.",
+        "delete_failed": "No se pudo eliminar este chat.",
     },
 }
 
@@ -472,6 +508,114 @@ def _notify_success(message: str) -> None:
         st.success(message)
 
 
+def _clear_analysis_state() -> None:
+    for key in [
+        "active_analysis_id",
+        "editor_title",
+        "editor_transcript_text",
+        "editor_source_filename",
+        "editor_meta",
+        "report_text",
+        "recommendation_text",
+    ]:
+        st.session_state.pop(key, None)
+
+
+@st.dialog(t("rename_chat"))
+def _rename_chat_dialog(
+    analysis_id: int,
+    current_title: str,
+) -> None:
+    with st.form(f"rename_chat_form_{analysis_id}"):
+        new_title = st.text_input(
+            t("chat_title"),
+            value=current_title,
+            key=f"rename_chat_input_{analysis_id}",
+        )
+
+        submitted = st.form_submit_button(
+            t("save"),
+            type="primary",
+            use_container_width=True,
+        )
+
+    if not submitted:
+        return
+
+    clean_title = new_title.strip()
+
+    if not clean_title:
+        st.error(t("title_required"))
+        return
+
+    renamed = rename_analysis_for_user(
+        analysis_id=int(analysis_id),
+        user_id=str(st.session_state["user_id"]),
+        title=clean_title,
+    )
+
+    if not renamed:
+        st.error(t("rename_failed"))
+        return
+
+    # Keep the currently opened title editor synchronized.
+    if int(st.session_state.get("active_analysis_id") or 0) == int(analysis_id):
+        st.session_state["editor_title"] = clean_title
+
+    _notify_success(t("chat_renamed"))
+    st.rerun()
+
+
+@st.dialog(t("delete_chat_title"))
+def _delete_chat_dialog(
+    analysis_id: int,
+    current_title: str,
+) -> None:
+    st.markdown(f"**{current_title}**")
+    st.warning(t("delete_chat_warning"))
+
+    delete_col, cancel_col = st.columns(2)
+
+    with delete_col:
+        confirmed = st.button(
+            t("confirm_delete"),
+            type="primary",
+            use_container_width=True,
+            key=f"confirm_delete_{analysis_id}",
+        )
+
+    with cancel_col:
+        cancelled = st.button(
+            t("cancel"),
+            use_container_width=True,
+            key=f"cancel_delete_{analysis_id}",
+        )
+
+    if cancelled:
+        st.rerun()
+
+    if not confirmed:
+        return
+
+    deleted = delete_analysis_for_user(
+        analysis_id=int(analysis_id),
+        user_id=str(st.session_state["user_id"]),
+    )
+
+    if not deleted:
+        st.error(t("delete_failed"))
+        return
+
+    # Clear the editor only when the deleted chat was currently open.
+    if int(st.session_state.get("active_analysis_id") or 0) == int(analysis_id):
+        _clear_analysis_state()
+        st.session_state["suppress_autoload"] = False
+
+    _notify_success(t("chat_deleted"))
+    st.rerun()
+
+
+
 def _record_accessible(record: Optional[Dict[str, Any]]) -> bool:
     if not record:
         return False
@@ -660,13 +804,61 @@ def _render_sidebar(models: List[str]) -> None:
         if rows:
             for row in rows:
                 rid = int(row["id"])
-                label = str(row.get("title") or row.get("source_filename") or f"Analysis {rid}")
-                text = label
-                st.markdown('<div class="paalss-thread-btn">', unsafe_allow_html=True)
-                if st.button(text, key=f"analysis_btn_{rid}", use_container_width=True):
-                    _load_analysis_into_state(rid)
-                    st.rerun()
-                st.markdown("</div>", unsafe_allow_html=True)
+
+                label = str(
+                    row.get("title")
+                    or row.get("source_filename")
+                    or f"Analysis {rid}"
+                )
+
+                title_col, menu_col = st.columns(
+                    [0.84, 0.16],
+                    gap="small",
+                )
+
+                with title_col:
+                    st.markdown(
+                        '<div class="paalss-thread-btn">',
+                        unsafe_allow_html=True,
+                    )
+
+                    if st.button(
+                        label,
+                        key=f"analysis_btn_{rid}",
+                        use_container_width=True,
+                    ):
+                        _load_analysis_into_state(rid)
+                        st.rerun()
+
+                    st.markdown("</div>", unsafe_allow_html=True)
+
+                with menu_col:
+                    with st.popover(
+                        "⋯",
+                        use_container_width=True,
+                    ):
+                        if st.button(
+                            t("open_chat"),
+                            key=f"open_chat_{rid}",
+                            use_container_width=True,
+                        ):
+                            _load_analysis_into_state(rid)
+                            st.rerun()
+
+                        if st.button(
+                            t("rename_chat"),
+                            key=f"rename_chat_{rid}",
+                            use_container_width=True,
+                        ):
+                            _rename_chat_dialog(rid, label)
+
+                        if st.button(
+                            t("delete_chat"),
+                            key=f"delete_chat_{rid}",
+                            use_container_width=True,
+                        ):
+                            _delete_chat_dialog(rid, label)
+
         else:
             st.caption(t("no_previous_analyses"))
 

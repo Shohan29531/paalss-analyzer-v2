@@ -664,3 +664,58 @@ def list_analyses_for_user(user_id: str, limit: int = 200) -> List[Dict[str, Any
         fetch="all",
     )
     return _rows_to_dicts(rows)
+
+
+def rename_analysis_for_user(
+    analysis_id: int,
+    user_id: str,
+    title: str,
+) -> bool:
+    clean_title = str(title or "").strip()
+    if not clean_title:
+        return False
+
+    row = _exec(
+        "SELECT id FROM analyses WHERE id = ? AND user_id = ?"
+        if not _USE_PG
+        else "SELECT id FROM analyses WHERE id = %s AND user_id = %s",
+        (analysis_id, user_id),
+        fetch="one",
+    )
+
+    if not row:
+        return False
+
+    _exec(
+        "UPDATE analyses SET title = ? WHERE id = ? AND user_id = ?"
+        if not _USE_PG
+        else "UPDATE analyses SET title = %s WHERE id = %s AND user_id = %s",
+        (clean_title, analysis_id, user_id),
+    )
+
+    return True
+
+
+def delete_analysis_for_user(
+    analysis_id: int,
+    user_id: str,
+) -> bool:
+    row = _exec(
+        "SELECT id FROM analyses WHERE id = ? AND user_id = ?"
+        if not _USE_PG
+        else "SELECT id FROM analyses WHERE id = %s AND user_id = %s",
+        (analysis_id, user_id),
+        fetch="one",
+    )
+
+    if not row:
+        return False
+
+    _exec(
+        "DELETE FROM analyses WHERE id = ? AND user_id = ?"
+        if not _USE_PG
+        else "DELETE FROM analyses WHERE id = %s AND user_id = %s",
+        (analysis_id, user_id),
+    )
+
+    return True
