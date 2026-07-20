@@ -530,6 +530,81 @@ st.markdown(
     font-size: 1.35rem !important;
     line-height: 1 !important;
   }
+
+  /* Sidebar layout: keep account controls at the bottom while only the
+     analysis history scrolls. Streamlit renders keyed st.container blocks
+     inside stLayoutWrapper elements, so the wrapper—not stElementContainer—
+     must be the flex item. */
+  section[data-testid="stSidebar"] div[data-testid="stSidebarContent"] {
+    height: 100dvh !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+  }
+
+  section[data-testid="stSidebar"] div[data-testid="stSidebarHeader"] {
+    flex: 0 0 auto !important;
+  }
+
+  section[data-testid="stSidebar"] div[data-testid="stSidebarUserContent"] {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    padding-bottom: 0.5rem !important;
+  }
+
+  section[data-testid="stSidebar"]
+  div[data-testid="stSidebarUserContent"]
+  > div[data-testid="stVerticalBlock"] {
+    height: 100% !important;
+    min-height: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+  }
+
+  /* The keyed analysis container is wrapped by stLayoutWrapper. Give that
+     wrapper all remaining height and make the chat list independently scroll. */
+  section[data-testid="stSidebar"]
+  div[data-testid="stSidebarUserContent"]
+  > div[data-testid="stVerticalBlock"]
+  > div[data-testid="stLayoutWrapper"]:has(> .st-key-sidebar_analysis_section) {
+    flex: 1 1 0 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+  }
+
+  section[data-testid="stSidebar"] .st-key-sidebar_analysis_section {
+    height: 100% !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    padding-right: 0.25rem !important;
+    padding-bottom: 0.75rem !important;
+  }
+
+  /* The account controls remain outside the scrolling history and stay at the
+     bottom of the sidebar, regardless of the number of saved chats. */
+  section[data-testid="stSidebar"]
+  div[data-testid="stSidebarUserContent"]
+  > div[data-testid="stVerticalBlock"]
+  > div[data-testid="stLayoutWrapper"]:has(> .st-key-sidebar_account_actions) {
+    flex: 0 0 auto !important;
+    margin-top: auto !important;
+  }
+
+  section[data-testid="stSidebar"] .st-key-sidebar_account_actions {
+    flex: 0 0 auto !important;
+    padding-top: 0.45rem !important;
+    padding-bottom: 0.25rem !important;
+    background: var(--secondary-background-color) !important;
+    border-top: 1px solid rgba(128, 128, 128, 0.45) !important;
+    box-shadow: 0 -0.5rem 0.9rem rgba(0, 0, 0, 0.05) !important;
+  }
+
+  section[data-testid="stSidebar"] .st-key-sidebar_account_actions hr {
+    display: none !important;
+  }
 </style>
 """,
     unsafe_allow_html=True,
@@ -847,70 +922,86 @@ def _render_sidebar(models: List[str]) -> None:
                 st.session_state.pop(key, None)
             st.rerun()
 
-        st.markdown(f"### {t('previous_analyses')}")
-        rows = list_analyses_for_user(str(st.session_state["user_id"]), limit=200)
-        if rows:
-            for row in rows:
-                rid = int(row["id"])
-                label = str(
-                    row.get("title")
-                    or row.get("source_filename")
-                    or f"Analysis {rid}"
-                )
+        with st.container(key="sidebar_analysis_section"):
+            st.markdown(f"### {t('previous_analyses')}")
+            rows = list_analyses_for_user(str(st.session_state["user_id"]), limit=200)
+            if rows:
+                for row in rows:
+                    rid = int(row["id"])
+                    label = str(
+                        row.get("title")
+                        or row.get("source_filename")
+                        or f"Analysis {rid}"
+                    )
 
-                title_col, menu_col = st.columns(
-                    [8.5, 1.5],
-                    gap="small",
-                    vertical_alignment="center",
-                )
+                    title_col, menu_col = st.columns(
+                        [8.5, 1.5],
+                        gap="small",
+                        vertical_alignment="center",
+                    )
 
-                with title_col:
-                    if st.button(
-                        label,
-                        key=f"analysis_btn_{rid}",
-                        use_container_width=True,
-                    ):
-                        _load_analysis_into_state(rid)
-                        st.rerun()
-
-                with menu_col:
-                    with st.popover("⋯", use_container_width=True):
+                    with title_col:
                         if st.button(
-                            t("open_chat"),
-                            key=f"open_chat_{rid}",
+                            label,
+                            key=f"analysis_btn_{rid}",
                             use_container_width=True,
                         ):
                             _load_analysis_into_state(rid)
                             st.rerun()
 
-                        if st.button(
-                            t("rename_chat"),
-                            key=f"rename_chat_{rid}",
-                            use_container_width=True,
-                        ):
-                            _rename_chat_dialog(rid, label)
+                    with menu_col:
+                        with st.popover("⋯", use_container_width=True):
+                            if st.button(
+                                t("open_chat"),
+                                key=f"open_chat_{rid}",
+                                use_container_width=True,
+                            ):
+                                _load_analysis_into_state(rid)
+                                st.rerun()
 
-                        if st.button(
-                            t("delete_chat"),
-                            key=f"delete_chat_{rid}",
-                            use_container_width=True,
-                        ):
-                            _delete_chat_dialog(rid, label)
-        else:
-            st.caption(t("no_previous_analyses"))
+                            if st.button(
+                                t("rename_chat"),
+                                key=f"rename_chat_{rid}",
+                                use_container_width=True,
+                            ):
+                                _rename_chat_dialog(rid, label)
 
-        with st.expander(t("change_password")):
-            current_pw = st.text_input(t("current_password"), type="password", key="cp_current")
-            new_pw = st.text_input(t("new_password"), type="password", key="cp_new")
-            if st.button(t("update_password"), use_container_width=True):
-                if change_user_password(str(st.session_state["user_id"]), current_pw, new_pw):
-                    _notify_success(t("password_changed"))
-                else:
-                    st.error(t("password_change_failed"))
+                            if st.button(
+                                t("delete_chat"),
+                                key=f"delete_chat_{rid}",
+                                use_container_width=True,
+                            ):
+                                _delete_chat_dialog(rid, label)
+            else:
+                st.caption(t("no_previous_analyses"))
 
-        if st.button(t("logout"), use_container_width=True):
-            _logout()
-            st.rerun()
+        with st.container(key="sidebar_account_actions"):
+            st.divider()
+
+            with st.expander(t("change_password")):
+                current_pw = st.text_input(
+                    t("current_password"),
+                    type="password",
+                    key="cp_current",
+                )
+                new_pw = st.text_input(
+                    t("new_password"),
+                    type="password",
+                    key="cp_new",
+                )
+                if st.button(t("update_password"), use_container_width=True):
+                    if change_user_password(
+                        str(st.session_state["user_id"]),
+                        current_pw,
+                        new_pw,
+                    ):
+                        _notify_success(t("password_changed"))
+                    else:
+                        st.error(t("password_change_failed"))
+
+            if st.button(t("logout"), use_container_width=True):
+                _logout()
+                st.rerun()
 
 
 def _render_admin_page(models: List[str]) -> None:
