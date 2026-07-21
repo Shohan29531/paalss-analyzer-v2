@@ -721,11 +721,10 @@ st.markdown(
   [class*="st-key-sidebar_chat_item_"]
   div[data-testid="stPopover"] button::before {
     content: "⋯";
-    display: block !important;
-    font-size: 1.25rem !important;
-    font-weight: 600 !important;
-    line-height: 1 !important;
-    transform: translateY(-0.08rem);
+    font-size: 0.9rem !important;
+    font-weight: 400 !important;
+    color: rgba(49, 51, 63, 0.30) !important;
+    opacity: 0.7 !important;
   }
 
   section[data-testid="stSidebar"]
