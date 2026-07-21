@@ -555,39 +555,94 @@ st.markdown(
     padding-top: 1rem !important;
   }
 
-  /* Let long chat titles wrap naturally inside their button. */
+  /* Each saved chat is one full-width title button. The menu trigger is
+     overlaid in the title's top-right corner instead of using a side column. */
+  section[data-testid="stSidebar"] [class*="st-key-sidebar_chat_item_"] {
+    position: relative !important;
+    margin-bottom: 0.35rem !important;
+  }
+
   section[data-testid="stSidebar"]
-  div[data-testid="stHorizontalBlock"] > div:first-child button {
+  [class*="st-key-sidebar_chat_item_"]
+  > div[data-testid="stVerticalBlock"] {
+    gap: 0 !important;
+  }
+
+  /* Let long titles wrap while reserving room for the overlaid menu button. */
+  section[data-testid="stSidebar"]
+  [class*="st-key-sidebar_chat_item_"]
+  div[data-testid="stButton"] > button {
     white-space: normal !important;
     height: auto !important;
-    min-height: 2.75rem !important;
-    padding-top: 0.55rem !important;
-    padding-bottom: 0.55rem !important;
+    min-height: 3.15rem !important;
+    padding: 0.55rem 2.7rem 0.55rem 0.75rem !important;
+    text-align: left !important;
   }
 
-  /* Compact three-dot trigger. The popover content is rendered elsewhere,
-     so these selectors affect only the sidebar trigger. */
-  section[data-testid="stSidebar"] div[data-testid="stPopover"] button {
-    width: 2.75rem !important;
-    min-width: 2.75rem !important;
-    height: 2.75rem !important;
-    min-height: 2.75rem !important;
+  section[data-testid="stSidebar"]
+  [class*="st-key-sidebar_chat_item_"]
+  div[data-testid="stButton"] > button p {
+    width: 100% !important;
+    text-align: left !important;
+  }
+
+  /* Position the three-dot trigger over the title button. It has no visible
+     container, border, or background until hovered. */
+  section[data-testid="stSidebar"]
+  [class*="st-key-sidebar_chat_item_"]
+  div[data-testid="stPopover"] {
+    position: absolute !important;
+    top: 0.22rem !important;
+    right: 0.22rem !important;
+    width: auto !important;
+    z-index: 15 !important;
+  }
+
+  section[data-testid="stSidebar"]
+  [class*="st-key-sidebar_chat_item_"]
+  div[data-testid="stPopover"] > button {
+    width: 2.15rem !important;
+    min-width: 2.15rem !important;
+    height: 2.15rem !important;
+    min-height: 2.15rem !important;
     padding: 0 !important;
     justify-content: center !important;
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
   }
 
-  /* Hide Streamlit's dropdown chevron; keep only the three dots. */
   section[data-testid="stSidebar"]
-  div[data-testid="stPopover"] button svg,
+  [class*="st-key-sidebar_chat_item_"]
+  div[data-testid="stPopover"] > button:hover {
+    background: rgba(128, 128, 128, 0.16) !important;
+  }
+
   section[data-testid="stSidebar"]
-  div[data-testid="stPopover"] button [data-testid="stIconMaterial"] {
+  [class*="st-key-sidebar_chat_item_"]
+  div[data-testid="stPopover"] > button:focus,
+  section[data-testid="stSidebar"]
+  [class*="st-key-sidebar_chat_item_"]
+  div[data-testid="stPopover"] > button:focus-visible {
+    box-shadow: none !important;
+    outline: none !important;
+  }
+
+  /* Hide Streamlit's popover chevron; keep only the three dots. */
+  section[data-testid="stSidebar"]
+  [class*="st-key-sidebar_chat_item_"]
+  div[data-testid="stPopover"] > button svg,
+  section[data-testid="stSidebar"]
+  [class*="st-key-sidebar_chat_item_"]
+  div[data-testid="stPopover"] > button [data-testid="stIconMaterial"] {
     display: none !important;
   }
 
   section[data-testid="stSidebar"]
-  div[data-testid="stPopover"] button p {
+  [class*="st-key-sidebar_chat_item_"]
+  div[data-testid="stPopover"] > button p {
     margin: 0 !important;
-    font-size: 1.35rem !important;
+    font-size: 1.3rem !important;
     line-height: 1 !important;
   }
 
@@ -1524,13 +1579,7 @@ def _render_sidebar(models: List[str]) -> None:
                         or f"Analysis {rid}"
                     )
 
-                    title_col, menu_col = st.columns(
-                        [8.5, 1.5],
-                        gap="small",
-                        vertical_alignment="center",
-                    )
-
-                    with title_col:
+                    with st.container(key=f"sidebar_chat_item_{rid}"):
                         if st.button(
                             label,
                             key=f"analysis_btn_{rid}",
@@ -1539,8 +1588,7 @@ def _render_sidebar(models: List[str]) -> None:
                             _load_analysis_into_state(rid)
                             st.rerun()
 
-                    with menu_col:
-                        with st.popover("⋯", use_container_width=True):
+                        with st.popover("⋯", use_container_width=False):
                             if st.button(
                                 t("rename_chat"),
                                 key=f"rename_chat_{rid}",
