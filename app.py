@@ -557,22 +557,43 @@ st.markdown(
 
   /* Each saved chat is one full-width title button. The menu trigger is
      overlaid in the title's top-right corner instead of using a side column. */
-/* Reduce spacing between saved chat titles. */
-section[data-testid="stSidebar"]
-.st-key-sidebar_analysis_section
-> div[data-testid="stVerticalBlock"] {
-    gap: 0.3rem !important;
-}
+  /* Keep saved-chat rows close together. Streamlit applies spacing on the
+     history container's nested vertical blocks, not only on each keyed item. */
+  section[data-testid="stSidebar"]
+  .st-key-sidebar_analysis_section
+  div[data-testid="stVerticalBlock"] {
+    gap: 0.22rem !important;
+  }
 
-section[data-testid="stSidebar"] [class*="st-key-sidebar_chat_item_"] {
+  section[data-testid="stSidebar"] [class*="st-key-sidebar_chat_item_"] {
     position: relative !important;
-    margin-bottom: 0 !important;
-}
+    margin: 0 !important;
+    padding: 0 !important;
+  }
 
   section[data-testid="stSidebar"]
   [class*="st-key-sidebar_chat_item_"]
   > div[data-testid="stVerticalBlock"] {
     gap: 0 !important;
+  }
+
+  /* The popover is wrapped in another Streamlit element. That wrapper must
+     also be absolutely positioned; otherwise it leaves a blank row below
+     every chat title even when the visible three-dot button is overlaid. */
+  section[data-testid="stSidebar"]
+  [class*="st-key-sidebar_chat_item_"]
+  div:has(> div[data-testid="stPopover"]) {
+    position: absolute !important;
+    top: 0.32rem !important;
+    right: 0.32rem !important;
+    width: 1.75rem !important;
+    min-width: 1.75rem !important;
+    max-width: 1.75rem !important;
+    height: 1.75rem !important;
+    min-height: 1.75rem !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    z-index: 15 !important;
   }
 
   /* Let long titles wrap while reserving room for the overlaid menu button. */
@@ -597,9 +618,9 @@ section[data-testid="stSidebar"] [class*="st-key-sidebar_chat_item_"] {
   section[data-testid="stSidebar"]
   [class*="st-key-sidebar_chat_item_"]
   div[data-testid="stPopover"] {
-    position: absolute !important;
-    top: 0.32rem !important;
-    right: 0.32rem !important;
+    position: static !important;
+    top: auto !important;
+    right: auto !important;
     width: 1.75rem !important;
     min-width: 1.75rem !important;
     max-width: 1.75rem !important;
