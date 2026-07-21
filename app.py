@@ -575,7 +575,7 @@ st.markdown(
     white-space: normal !important;
     height: auto !important;
     min-height: 3.15rem !important;
-    padding: 0.55rem 2.7rem 0.55rem 0.75rem !important;
+    padding: 0.55rem 2.25rem 0.55rem 0.75rem !important;
     text-align: left !important;
   }
 
@@ -586,64 +586,90 @@ st.markdown(
     text-align: left !important;
   }
 
-  /* Position the three-dot trigger over the title button. It has no visible
-     container, border, or background until hovered. */
+  /* Compact three-dot menu overlaid in the title's top-right corner. */
   section[data-testid="stSidebar"]
   [class*="st-key-sidebar_chat_item_"]
   div[data-testid="stPopover"] {
     position: absolute !important;
-    top: 0.22rem !important;
-    right: 0.22rem !important;
-    width: auto !important;
+    top: 0.32rem !important;
+    right: 0.32rem !important;
+    width: 1.75rem !important;
+    min-width: 1.75rem !important;
+    max-width: 1.75rem !important;
+    height: 1.75rem !important;
+    min-height: 1.75rem !important;
     z-index: 15 !important;
   }
 
+  /* Streamlit may place one or more wrappers between stPopover and button.
+     Constrain every wrapper so the trigger cannot expand into a large box. */
   section[data-testid="stSidebar"]
   [class*="st-key-sidebar_chat_item_"]
-  div[data-testid="stPopover"] > button {
-    width: 2.15rem !important;
-    min-width: 2.15rem !important;
-    height: 2.15rem !important;
-    min-height: 2.15rem !important;
+  div[data-testid="stPopover"] > div {
+    width: 1.75rem !important;
+    min-width: 1.75rem !important;
+    max-width: 1.75rem !important;
+    height: 1.75rem !important;
+    min-height: 1.75rem !important;
+  }
+
+  section[data-testid="stSidebar"]
+  [class*="st-key-sidebar_chat_item_"]
+  div[data-testid="stPopover"] button {
+    width: 1.75rem !important;
+    min-width: 1.75rem !important;
+    max-width: 1.75rem !important;
+    height: 1.75rem !important;
+    min-height: 1.75rem !important;
+    max-height: 1.75rem !important;
     padding: 0 !important;
+    margin: 0 !important;
+    display: flex !important;
+    align-items: center !important;
     justify-content: center !important;
     background: transparent !important;
     border: 0 !important;
+    border-radius: 0.35rem !important;
     box-shadow: none !important;
+    color: inherit !important;
+    font-size: 0 !important;
+    line-height: 1 !important;
   }
 
+  /* Hide Streamlit's built-in label and dropdown chevron. Recreate only the
+     ellipsis so the trigger is visually just three dots. */
   section[data-testid="stSidebar"]
   [class*="st-key-sidebar_chat_item_"]
-  div[data-testid="stPopover"] > button:hover {
-    background: rgba(128, 128, 128, 0.16) !important;
-  }
-
-  section[data-testid="stSidebar"]
-  [class*="st-key-sidebar_chat_item_"]
-  div[data-testid="stPopover"] > button:focus,
-  section[data-testid="stSidebar"]
-  [class*="st-key-sidebar_chat_item_"]
-  div[data-testid="stPopover"] > button:focus-visible {
-    box-shadow: none !important;
-    outline: none !important;
-  }
-
-  /* Hide Streamlit's popover chevron; keep only the three dots. */
-  section[data-testid="stSidebar"]
-  [class*="st-key-sidebar_chat_item_"]
-  div[data-testid="stPopover"] > button svg,
-  section[data-testid="stSidebar"]
-  [class*="st-key-sidebar_chat_item_"]
-  div[data-testid="stPopover"] > button [data-testid="stIconMaterial"] {
+  div[data-testid="stPopover"] button > * {
     display: none !important;
   }
 
   section[data-testid="stSidebar"]
   [class*="st-key-sidebar_chat_item_"]
-  div[data-testid="stPopover"] > button p {
-    margin: 0 !important;
-    font-size: 1.3rem !important;
+  div[data-testid="stPopover"] button::before {
+    content: "\22EF";
+    display: block !important;
+    font-size: 1.25rem !important;
+    font-weight: 600 !important;
     line-height: 1 !important;
+    transform: translateY(-0.08rem);
+  }
+
+  section[data-testid="stSidebar"]
+  [class*="st-key-sidebar_chat_item_"]
+  div[data-testid="stPopover"] button:hover {
+    background: rgba(128, 128, 128, 0.10) !important;
+  }
+
+  section[data-testid="stSidebar"]
+  [class*="st-key-sidebar_chat_item_"]
+  div[data-testid="stPopover"] button:focus,
+  section[data-testid="stSidebar"]
+  [class*="st-key-sidebar_chat_item_"]
+  div[data-testid="stPopover"] button:focus-visible {
+    background: rgba(128, 128, 128, 0.10) !important;
+    box-shadow: none !important;
+    outline: none !important;
   }
 
   /* Sidebar layout: keep account controls at the bottom while only the
