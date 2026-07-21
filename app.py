@@ -620,7 +620,7 @@ st.markdown(
   [class*="st-key-analysis_btn_"] button {
     display: flex !important;
     justify-content: flex-start !important;
-    align-items: flex-start !important;
+    align-items: center !important;
     white-space: normal !important;
     width: 100% !important;
     height: auto !important;
