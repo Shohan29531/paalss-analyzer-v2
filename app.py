@@ -647,7 +647,7 @@ st.markdown(
   section[data-testid="stSidebar"]
   [class*="st-key-sidebar_chat_item_"]
   div[data-testid="stPopover"] button::before {
-    content: "\22EF";
+    content: "⋯";
     display: block !important;
     font-size: 1.25rem !important;
     font-weight: 600 !important;
