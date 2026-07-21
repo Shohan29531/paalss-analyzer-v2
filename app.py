@@ -598,28 +598,28 @@ st.markdown(
   [class*="st-key-sidebar_chat_item_"]
   div:has(> div[data-testid="stPopover"]) {
     position: absolute !important;
-    top: 0.32rem !important;
-    right: 0.32rem !important;
+    top: 0.12rem !important;
+    right: 0.   2rem !important;
     width: 1.75rem !important;
     min-width: 1.75rem !important;
     max-width: 1.75rem !important;
     height: 1.75rem !important;
     min-height: 1.75rem !important;
     margin: 0 !important;
-    padding: 0 !important;
+    padding: 0.05rem 2.15rem 0.05rem 0.55rem !important;
     z-index: 15 !important;
   }
 
-  /* Let long titles wrap while reserving room for the overlaid menu button. */
-  section[data-testid="stSidebar"]
-  [class*="st-key-sidebar_chat_item_"]
-  div[data-testid="stButton"] > button {
+section[data-testid="stSidebar"]
+[class*="st-key-sidebar_chat_item_"]
+div[data-testid="stButton"] > button {
     white-space: normal !important;
     height: auto !important;
-    min-height: 3.15rem !important;
-    padding: 0.55rem 2.25rem 0.55rem 0.75rem !important;
+    min-height: 2.15rem !important;
+    padding: 0.15rem 2.15rem 0.15rem 0.55rem !important;
     text-align: left !important;
-  }
+    line-height: 1.25 !important;
+}
 
   section[data-testid="stSidebar"]
   [class*="st-key-sidebar_chat_item_"]
