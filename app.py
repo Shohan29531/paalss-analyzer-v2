@@ -576,7 +576,7 @@ st.markdown(
   section[data-testid="stSidebar"]
   .st-key-sidebar_analysis_section
   div[data-testid="stVerticalBlock"] {
-    gap: 0.22rem !important;
+    gap: 0.08rem !important;
   }
 
   section[data-testid="stSidebar"] [class*="st-key-sidebar_chat_item_"] {
@@ -599,44 +599,63 @@ st.markdown(
   div:has(> div[data-testid="stPopover"]) {
     position: absolute !important;
     top: 0.12rem !important;
-    right: 0.2rem !important;
+    right: 0.20rem !important;
     width: 1.75rem !important;
     min-width: 1.75rem !important;
     max-width: 1.75rem !important;
     height: 1.75rem !important;
     min-height: 1.75rem !important;
     margin: 0 !important;
-    padding: 0.05rem 2.15rem 0.05rem 0.55rem !important;
+    padding: 0 !important;
     z-index: 15 !important;
   }
 
-section[data-testid="stSidebar"]
-[class*="st-key-sidebar_chat_item_"]
-div[data-testid="stButton"] > button {
+  /* Compact saved-chat title buttons. Target both the chat-item container and
+     Streamlit's keyed button wrapper because recent Streamlit versions center
+     the inner Markdown container independently of the outer button. */
+  section[data-testid="stSidebar"]
+  [class*="st-key-sidebar_chat_item_"]
+  div[data-testid="stButton"] > button,
+  section[data-testid="stSidebar"]
+  [class*="st-key-analysis_btn_"] button {
+    display: flex !important;
+    justify-content: flex-start !important;
+    align-items: flex-start !important;
     white-space: normal !important;
+    width: 100% !important;
     height: auto !important;
     min-height: 2.15rem !important;
     padding: 0.15rem 2.15rem 0.15rem 0.55rem !important;
-
     text-align: left !important;
-    justify-content: flex-start !important;
-    align-items: flex-start !important;
-
     line-height: 1.25 !important;
-}
-
-section[data-testid="stSidebar"]
-[class*="st-key-sidebar_chat_item_"]
-div[data-testid="stButton"] > button p {
-    width: 100% !important;
-    text-align: left !important;
-    margin: 0 !important;
-}
+  }
 
   section[data-testid="stSidebar"]
   [class*="st-key-sidebar_chat_item_"]
-  div[data-testid="stButton"] > button p {
+  div[data-testid="stButton"] > button > div[data-testid="stMarkdownContainer"],
+  section[data-testid="stSidebar"]
+  [class*="st-key-analysis_btn_"] button > div[data-testid="stMarkdownContainer"] {
+    display: block !important;
+    flex: 1 1 auto !important;
     width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    text-align: left !important;
+  }
+
+  section[data-testid="stSidebar"]
+  [class*="st-key-sidebar_chat_item_"]
+  div[data-testid="stButton"] > button p,
+  section[data-testid="stSidebar"]
+  [class*="st-key-analysis_btn_"] button p,
+  section[data-testid="stSidebar"]
+  [class*="st-key-analysis_btn_"] button span {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
     text-align: left !important;
   }
 
