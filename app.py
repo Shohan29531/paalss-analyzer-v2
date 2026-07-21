@@ -581,7 +581,7 @@ st.markdown(
 
   section[data-testid="stSidebar"] [class*="st-key-sidebar_chat_item_"] {
     position: relative !important;
-    margin: 0 !important;
+    margin: 0 0 -0.65rem 0 !important;
     padding: 0 !important;
   }
 
