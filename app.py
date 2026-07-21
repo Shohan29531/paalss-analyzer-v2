@@ -599,7 +599,7 @@ st.markdown(
   div:has(> div[data-testid="stPopover"]) {
     position: absolute !important;
     top: 0.12rem !important;
-    right: 0.   2rem !important;
+    right: 0.2rem !important;
     width: 1.75rem !important;
     min-width: 1.75rem !important;
     max-width: 1.75rem !important;
