@@ -557,10 +557,17 @@ st.markdown(
 
   /* Each saved chat is one full-width title button. The menu trigger is
      overlaid in the title's top-right corner instead of using a side column. */
-  section[data-testid="stSidebar"] [class*="st-key-sidebar_chat_item_"] {
+/* Reduce spacing between saved chat titles. */
+section[data-testid="stSidebar"]
+.st-key-sidebar_analysis_section
+> div[data-testid="stVerticalBlock"] {
+    gap: 0.3rem !important;
+}
+
+section[data-testid="stSidebar"] [class*="st-key-sidebar_chat_item_"] {
     position: relative !important;
-    margin-bottom: 0.05rem !important;
-  }
+    margin-bottom: 0 !important;
+}
 
   section[data-testid="stSidebar"]
   [class*="st-key-sidebar_chat_item_"]
