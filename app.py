@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import re
 import zipfile
@@ -11,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from xml.sax.saxutils import escape
 
 import streamlit as st
+import streamlit.components.v1 as components
 from streamlit_cookies_manager_ext import EncryptedCookieManager
 
 from lib.docx_report import report_text_to_docx_bytes
@@ -1522,7 +1524,7 @@ def _save_title() -> None:
 
 
 def _renumber_transcript_text(text: str) -> str:
-    """Renumber each non-empty transcript line sequentially from 1."""
+    """Return transcript utterances with consecutive 1-based numbering."""
     utterances: List[str] = []
 
     for raw_line in str(text or "").splitlines():
@@ -1530,36 +1532,169 @@ def _renumber_transcript_text(text: str) -> str:
         if not line:
             continue
 
-        # Remove an existing line-number prefix such as ``3.``, ``3)``,
-        # ``3-``, or ``3:`` before assigning the new sequential number.
+        # Remove an existing prefix such as 12., 12), 12-, or 12:.
+        # A line containing only a number is treated as a deleted/empty line.
         if re.fullmatch(r"\d+\s*[.)\-:]?", line):
             continue
         content = re.sub(r"^\d+\s*[.)\-:]\s*", "", line).strip()
         if content:
             utterances.append(content)
 
-    return "\n".join(f"{number}. {content}" for number, content in enumerate(utterances, start=1))
+    return "\n".join(
+        f"{line_number}. {content}"
+        for line_number, content in enumerate(utterances, start=1)
+    )
 
 
-def _renumber_editor_transcript() -> None:
-    st.session_state["editor_transcript_text"] = _renumber_transcript_text(
+def _normalize_transcript_editor_state() -> str:
+    """Normalize the textarea value before Streamlit renders the next run."""
+    normalized = _renumber_transcript_text(
         str(st.session_state.get("editor_transcript_text") or "")
     )
+    st.session_state["editor_transcript_text"] = normalized
+    return normalized
 
 
 def _save_transcript() -> None:
     analysis_id = st.session_state.get("active_analysis_id")
     if not analysis_id:
         return
-    transcript_text = _renumber_transcript_text(
-        str(st.session_state.get("editor_transcript_text") or "")
-    )
+
+    transcript_text = _normalize_transcript_editor_state()
     update_analysis(
         int(analysis_id),
         transcript_text=transcript_text,
         meta=st.session_state.get("editor_meta") or {},
     )
     _notify_success(t("transcript_saved"))
+
+
+def _prepare_transcript_for_analysis() -> None:
+    """Guarantee consecutive numbering before the analysis starts."""
+    _normalize_transcript_editor_state()
+
+
+def _render_live_transcript_renumbering(label: str) -> None:
+    """Renumber the visible Streamlit textarea immediately in the browser.
+
+    Streamlit normally waits for blur or Command/Ctrl+Enter before Python sees
+    textarea edits. This small browser-side listener updates numbering as soon
+    as a numbered line is added or removed, while the Python callbacks remain
+    the source of truth for saving and analysis.
+    """
+    label_json = json.dumps(str(label))
+    components.html(
+        rf"""
+<script>
+(() => {{
+  const targetLabel = {label_json};
+  const parentWindow = window.parent;
+  const parentDocument = parentWindow.document;
+
+  function findTranscriptTextarea() {{
+    const textareas = Array.from(parentDocument.querySelectorAll('textarea'));
+    return textareas.find((textarea) =>
+      textarea.getAttribute('aria-label') === targetLabel
+    ) || null;
+  }}
+
+  function stripNumberPrefix(line) {{
+    return line.replace(/^\s*\d+\s*[.)\-:]\s*/, '').trim();
+  }}
+
+  function renumber(value) {{
+    const lines = String(value || '').replace(/\r\n/g, '\n').split('\n');
+    let nextNumber = 1;
+
+    return lines.map((rawLine) => {{
+      const trimmed = rawLine.trim();
+      if (!trimmed) return '';
+      if (/^\d+\s*[.)\-:]?$/.test(trimmed)) return '';
+
+      const content = stripNumberPrefix(rawLine);
+      if (!content) return '';
+      return `${{nextNumber++}}. ${{content}}`;
+    }}).join('\n');
+  }}
+
+  function cursorForRenumberedText(oldValue, newValue, oldPosition) {{
+    const safePosition = Math.max(0, Math.min(oldPosition ?? 0, oldValue.length));
+    const oldBeforeCursor = oldValue.slice(0, safePosition);
+    const oldLineIndex = oldBeforeCursor.split('\n').length - 1;
+    const oldLineStart = oldBeforeCursor.lastIndexOf('\n') + 1;
+    const oldLines = oldValue.split('\n');
+    const oldLine = oldLines[oldLineIndex] || '';
+    const oldPrefix = (oldLine.match(/^\s*\d+\s*[.)\-:]\s*/) || [''])[0];
+    const contentColumn = Math.max(0, safePosition - oldLineStart - oldPrefix.length);
+
+    const newLines = newValue.split('\n');
+    const newLineIndex = Math.min(oldLineIndex, Math.max(0, newLines.length - 1));
+    const newLine = newLines[newLineIndex] || '';
+    const newPrefix = (newLine.match(/^\s*\d+\s*[.)\-:]\s*/) || [''])[0];
+    const newContentLength = Math.max(0, newLine.length - newPrefix.length);
+
+    let position = 0;
+    for (let i = 0; i < newLineIndex; i += 1) {{
+      position += newLines[i].length + 1;
+    }}
+    return position + newPrefix.length + Math.min(contentColumn, newContentLength);
+  }}
+
+  function attach() {{
+    const textarea = findTranscriptTextarea();
+    if (!textarea) return false;
+    if (textarea.dataset.paalssLiveRenumbering === '1') return true;
+    textarea.dataset.paalssLiveRenumbering = '1';
+
+    let updating = false;
+    let timer = null;
+
+    const normalizeVisibleValue = () => {{
+      if (updating) return;
+      const oldValue = textarea.value;
+      const newValue = renumber(oldValue);
+      if (newValue === oldValue) return;
+
+      const oldStart = textarea.selectionStart;
+      const oldEnd = textarea.selectionEnd;
+      const newStart = cursorForRenumberedText(oldValue, newValue, oldStart);
+      const newEnd = cursorForRenumberedText(oldValue, newValue, oldEnd);
+
+      updating = true;
+      const valueSetter = Object.getOwnPropertyDescriptor(
+        parentWindow.HTMLTextAreaElement.prototype,
+        'value'
+      ).set;
+      valueSetter.call(textarea, newValue);
+      textarea.dispatchEvent(new parentWindow.Event('input', {{ bubbles: true }}));
+      textarea.setSelectionRange(newStart, newEnd);
+      updating = false;
+    }};
+
+    textarea.addEventListener('input', () => {{
+      if (updating) return;
+      parentWindow.clearTimeout(timer);
+      timer = parentWindow.setTimeout(normalizeVisibleValue, 0);
+    }});
+
+    normalizeVisibleValue();
+    return true;
+  }}
+
+  if (!attach()) {{
+    let attempts = 0;
+    const retry = parentWindow.setInterval(() => {{
+      attempts += 1;
+      if (attach() || attempts >= 80) parentWindow.clearInterval(retry);
+    }}, 100);
+  }}
+}})();
+</script>
+        """,
+        height=0,
+        width=0,
+        scrolling=False,
+    )
 
 
 def _create_analysis_from_upload(uploaded: Any) -> None:
@@ -1927,22 +2062,23 @@ def _render_chat_tab() -> None:
             t("transcript_editor"),
             key="editor_transcript_text",
             height=360,
-            on_change=_renumber_editor_transcript,
+            on_change=_normalize_transcript_editor_state,
         )
+        _render_live_transcript_renumbering(t("transcript_editor"))
+
         save_cols = st.columns([0.4, 0.6])
-        if save_cols[0].button(
+        save_cols[0].button(
             t("save_transcript"),
             use_container_width=True,
-            on_click=_renumber_editor_transcript,
-        ):
-            _save_transcript()
+            on_click=_save_transcript,
+        )
 
         run_cols = st.columns([0.45, 0.55])
         run = run_cols[0].button(
             t("run_analysis"),
             type="primary",
             use_container_width=True,
-            on_click=_renumber_editor_transcript,
+            on_click=_prepare_transcript_for_analysis,
         )
         stream = run_cols[1].toggle(t("stream_output"), value=True)
 
