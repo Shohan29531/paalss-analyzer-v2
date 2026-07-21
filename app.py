@@ -723,7 +723,7 @@ st.markdown(
     content: "⋯";
     font-size: 0.9rem !important;
     font-weight: 400 !important;
-    color: rgba(49, 51, 63, 0.30) !important;
+    color: rgba(49, 51, 63, 0.60) !important;
     opacity: 0.7 !important;
   }
 
