@@ -548,6 +548,20 @@ st.markdown(
     padding-top: 0.6rem;
   }
 
+  /* Low-emphasis account/model metadata shown above the sidebar title. */
+  section[data-testid="stSidebar"] .sidebar-session-meta {
+    color: #a8acb6 !important;
+    font-size: 0.78rem !important;
+    line-height: 1.35 !important;
+    margin: 0 0 0.35rem 0 !important;
+    padding: 0 !important;
+  }
+
+  section[data-testid="stSidebar"] .sidebar-session-meta > div {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
   div.block-container {
     max-width: 100% !important;
     padding-left: 1.2rem;
@@ -562,7 +576,7 @@ st.markdown(
   section[data-testid="stSidebar"]
   .st-key-sidebar_analysis_section
   div[data-testid="stVerticalBlock"] {
-    gap: 0 !important;
+    gap: 0.22rem !important;
   }
 
   section[data-testid="stSidebar"] [class*="st-key-sidebar_chat_item_"] {
@@ -1595,14 +1609,24 @@ def _render_login() -> None:
 
 def _render_sidebar(models: List[str]) -> None:
     with st.sidebar:
-        st.markdown(f"## {_app_title()}")
-        _render_language_checkboxes("sidebar")
-
         is_admin = st.session_state.get("role") == "admin"
         role_key = "role_admin" if is_admin else "role_user"
-        st.caption(f"{t('signed_in_as')}: **{st.session_state['user_id']}** ({t(role_key)})")
         current_model = get_active_model(DEFAULT_MODEL_FROM_CONFIG)
-        st.caption(f"**{t('active_model')}:** {current_model}")
+
+        # Keep account/model details visible but intentionally low-emphasis.
+        # They appear above the app title because they are secondary metadata.
+        st.markdown(
+            f"""
+            <div class="sidebar-session-meta">
+                <div>{escape(t('signed_in_as'))}: {escape(str(st.session_state['user_id']))} ({escape(t(role_key))})</div>
+                <div>{escape(t('active_model'))}: {escape(str(current_model))}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(f"## {_app_title()}")
+        _render_language_checkboxes("sidebar")
 
         if is_admin:
             st.radio(
