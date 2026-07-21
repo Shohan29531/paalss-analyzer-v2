@@ -562,7 +562,7 @@ st.markdown(
   section[data-testid="stSidebar"]
   .st-key-sidebar_analysis_section
   div[data-testid="stVerticalBlock"] {
-    gap: 0.05rem !important;
+    gap: 0 !important;
   }
 
   section[data-testid="stSidebar"] [class*="st-key-sidebar_chat_item_"] {
