@@ -1521,13 +1521,42 @@ def _save_title() -> None:
     _notify_success(t("title_saved"))
 
 
+def _renumber_transcript_text(text: str) -> str:
+    """Renumber each non-empty transcript line sequentially from 1."""
+    utterances: List[str] = []
+
+    for raw_line in str(text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        # Remove an existing line-number prefix such as ``3.``, ``3)``,
+        # ``3-``, or ``3:`` before assigning the new sequential number.
+        if re.fullmatch(r"\d+\s*[.)\-:]?", line):
+            continue
+        content = re.sub(r"^\d+\s*[.)\-:]\s*", "", line).strip()
+        if content:
+            utterances.append(content)
+
+    return "\n".join(f"{number}. {content}" for number, content in enumerate(utterances, start=1))
+
+
+def _renumber_editor_transcript() -> None:
+    st.session_state["editor_transcript_text"] = _renumber_transcript_text(
+        str(st.session_state.get("editor_transcript_text") or "")
+    )
+
+
 def _save_transcript() -> None:
     analysis_id = st.session_state.get("active_analysis_id")
     if not analysis_id:
         return
+    transcript_text = _renumber_transcript_text(
+        str(st.session_state.get("editor_transcript_text") or "")
+    )
     update_analysis(
         int(analysis_id),
-        transcript_text=str(st.session_state.get("editor_transcript_text") or ""),
+        transcript_text=transcript_text,
         meta=st.session_state.get("editor_meta") or {},
     )
     _notify_success(t("transcript_saved"))
@@ -1894,13 +1923,27 @@ def _render_chat_tab() -> None:
         if title_cols[0].button(t("save_title"), use_container_width=True):
             _save_title()
 
-        st.text_area(t("transcript_editor"), key="editor_transcript_text", height=360)
+        st.text_area(
+            t("transcript_editor"),
+            key="editor_transcript_text",
+            height=360,
+            on_change=_renumber_editor_transcript,
+        )
         save_cols = st.columns([0.4, 0.6])
-        if save_cols[0].button(t("save_transcript"), use_container_width=True):
+        if save_cols[0].button(
+            t("save_transcript"),
+            use_container_width=True,
+            on_click=_renumber_editor_transcript,
+        ):
             _save_transcript()
 
         run_cols = st.columns([0.45, 0.55])
-        run = run_cols[0].button(t("run_analysis"), type="primary", use_container_width=True)
+        run = run_cols[0].button(
+            t("run_analysis"),
+            type="primary",
+            use_container_width=True,
+            on_click=_renumber_editor_transcript,
+        )
         stream = run_cols[1].toggle(t("stream_output"), value=True)
 
         if run:
