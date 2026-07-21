@@ -617,8 +617,20 @@ div[data-testid="stButton"] > button {
     height: auto !important;
     min-height: 2.15rem !important;
     padding: 0.15rem 2.15rem 0.15rem 0.55rem !important;
+
     text-align: left !important;
+    justify-content: flex-start !important;
+    align-items: flex-start !important;
+
     line-height: 1.25 !important;
+}
+
+section[data-testid="stSidebar"]
+[class*="st-key-sidebar_chat_item_"]
+div[data-testid="stButton"] > button p {
+    width: 100% !important;
+    text-align: left !important;
+    margin: 0 !important;
 }
 
   section[data-testid="stSidebar"]
